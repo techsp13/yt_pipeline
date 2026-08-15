@@ -1,0 +1,89 @@
+# ─── Secrets & credentials (never commit) ───────────────────────────────
+.env
+.env.*
+!.env.example
+client_secrets.json
+youtube_token.json
+*_token.json
+*.pem
+*.key
+
+# ─── Runtime state / locks / logs ───────────────────────────────────────
+*.lock
+active_project.json
+agent_state.json
+worker_state.json
+gemini_key_state.json
+.gflow_project_id
+.gflow_current_profile
+crash.log
+*.log
+run_debug*
+speed_diag.txt
+gflow_diag.txt
+colab_script.txt
+
+# ─── Python ─────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# ─── Build artifacts ────────────────────────────────────────────────────
+dist/
+build/
+*.exe
+*.spec
+
+# ─── Generated project / channel data ───────────────────────────────────
+channels/
+instagram_reels/
+Thumbnails/
+thumbnail_stickman_assets/
+
+# ─── Temp & output dirs ─────────────────────────────────────────────────
+temp/
+tmp/
+output_temp/
+test_batch_out/
+test_5batch_out/
+test_final_batch/
+test_isolated_out/
+test_reuse_project/
+test_single_project/
+test_single_proj_all/
+test_single_prompt_out/
+
+# ─── Media (generated) ──────────────────────────────────────────────────
+*.mp4
+*.mkv
+*.mp3
+*.wav
+*.m4a
+*.jpg
+*.jpeg
+*.gif
+*.webp
+
+# ─── Scratch / test artifacts ───────────────────────────────────────────
+test_*.png
+test_*.mp4
+test_*.wav
+*.png
+*.jpg
+3bcfed40-*.jpg
+breakdown.txt
+test_breakdown.txt
+test_long_breakdown.txt
+prompts_out.txt
+gap_prompts_view.txt
+meesho_search_json.json
+scenes_payload.json
+
+# ─── Stray / runtime-state files at repo root ───────────────────────────
+/python
+/Current
+
+# ─── Freebuff app dirs ──────────────────────────────────────────────────
+.freebuff/

@@ -1,0 +1,158 @@
+# YouTube Automation Workflow Pipeline v2.0
+
+An intelligent, self-healing, human-in-the-loop automated video creation engine. This pipeline automates topic research, scripting, scene breakdown, image generation (with multi-worker fallbacks), voice cloning, subtitle alignment, final video rendering, and SEO package archiving.
+
+---
+
+## 1. Pipeline Architecture Diagram
+
+Below is the execution flow from topic input to the final ready-to-upload YouTube package:
+
+```mermaid
+graph TD
+    A[Topic Input] --> B[Step 1-3: Topic, Title & SEO Research]
+    B --> C[Step 4: Script Writing]
+    C --> D[Step 5: Scene Breakdown Generation]
+    D -->|Telegram Approval| E[Step 6-7: Image Prompt & Generation]
+    E -->|Cloudflare Workers Fallback| F[Step 8: Voiceover TTS Generation]
+    F --> G[Step 9: Subtitle Generation & Alignment]
+    G --> H[Step 10-11: Scene Video Rendering & Merging]
+    H --> I[Step 12-15: Thumbnail, SEO Packaging & Upload]
+    I --> J[Project Archive ZIP]
+```
+
+---
+
+## 2. Key System Features
+
+### 🔄 Intelligent Gemini API Key Rotation
+To prevent rate limits or daily quota exhaustion (`429 RESOURCE_EXHAUSTED` or `503 Service Unavailable`), the system parses multiple API keys from the configuration and rotates through them sequentially. If all keys fail for a model, it automatically falls back to secondary models (e.g., from `gemini-2.5-flash` to `gemini-1.5-flash` and `gemini-1.5-pro`).
+
+### ☁️ Cloudflare Workers Image Generation Failover
+Image generation uses custom Cloudflare Worker APIs running FLUX models. The system registers a registry of multiple independent Worker endpoints. If a worker runs out of its daily free allocation of neural compute or rate-limits, the system instantly switches to a fallback worker URL and continues generating without crashing the pipeline.
+
+### 💬 Interactive Telegram Control Bot
+The entire workflow is human-approved via Telegram messages and inline interactive buttons:
+- **Approve/Retry Steps:** Users can review script drafts, titles, and generated images in real-time.
+- **`/unapprove <SceneNumber>`:** Instantly deletes a specific approved scene image to let the user review or tweak the generation prompt.
+- **`/reset`:** Resets the pipeline state to start a new project.
+
+---
+
+## 3. Standard Folder Structure (15 Steps)
+
+Each project is initialized with an isolated workspace containing 15 dedicated directories:
+
+| Directory | Purpose |
+| :--- | :--- |
+| `01_Research` | Topic briefs, competitor research, and source documents. |
+| `02_SEO` | CTR-optimized titles, hashtags, descriptions, and tags. |
+| `03_Script` | Approved narrations, hooks, and full script drafts. |
+| `04_Scenes` | Markdown list of scenes with corresponding visual prompts. |
+| `05_Image_Prompts` | Saved image prompts for generation. |
+| `06_Images` | Generated widescreen (16:9) scene illustrations. |
+| `07_Voice` | Cloned voiceover WAV clips for each scene. |
+| `08_Background_Music`| Ambient audio files and volume-mixed tracks. |
+| `09_Subtitles` | Generated SRT files and aligned timestamps. |
+| `10_Animation` | Rendered MP4 clips for individual scenes. |
+| `11_Final_Video` | Assembled, merged video with burnt-in subtitles. |
+| `12_Thumbnail` | CTR-optimized YouTube video thumbnail. |
+| `13_Logs` | Step status, command executions, and console history. |
+| `14_Checkpoints` | Save/restore recovery state files. |
+| `15_Backups` | Zip archives and raw source file versions. |
+
+---
+
+## 4. Key Python Modules (Clean Blueprints)
+
+### A. API Key Rotation Client (`creative_assistant.py`)
+```python
+import os
+import httpx
+from google import genai
+
+def _generate_with_retry(prompt, keys):
+    key_idx = 0
+    models = ["gemini-2.5-flash", "gemini-1.5-flash"]
+    model_idx = 0
+    
+    # Split timeout: No connect limit (avoids ssl handshake timeouts on Windows), strict read limit
+    timeout_config = httpx.Timeout(60.0, connect=None)
+    client = genai.Client(
+        api_key=keys[key_idx], 
+        http_options={'client_args': {'timeout': timeout_config}}
+    )
+    
+    for attempt in range(6):
+        try:
+            response = client.models.generate_content(
+                model=models[model_idx],
+                contents=prompt
+            )
+            return response.text
+        except Exception as e:
+            # Rotate key on API error or connection failure
+            if key_idx < len(keys) - 1:
+                key_idx += 1
+                client = genai.Client(
+                    api_key=keys[key_idx],
+                    http_options={'client_args': {'timeout': timeout_config}}
+                )
+            # Switch models if all keys fail
+            elif model_idx < len(models) - 1:
+                model_idx += 1
+                key_idx = 0
+                client = genai.Client(
+                    api_key=keys[key_idx],
+                    http_options={'client_args': {'timeout': timeout_config}}
+                )
+            else:
+                raise e
+```
+
+### B. Image Gen Failover (`hf_image_gen.py`)
+```python
+import requests
+import time
+
+def generate_image_hf(prompt, filename):
+    workers = [
+        "https://your-primary-worker.workers.dev/",
+        "https://your-fallback-1.workers.dev/",
+        "https://your-fallback-2.workers.dev/"
+    ]
+    
+    payload = {"prompt": prompt, "width": 1024, "height": 576}
+    
+    for idx, url in enumerate(workers):
+        headers = {
+            "Authorization": "Bearer YOUR_SECRET_TOKEN",
+            "Content-Type": "application/json"
+        }
+        for attempt in range(3):
+            try:
+                response = requests.post(url, headers=headers, json=payload, timeout=60)
+                if response.status_code == 200:
+                    with open(filename, "wb") as f:
+                        f.write(response.content)
+                    return True
+                # Break retry loop to rotate URL on daily limit hits (e.g. 500, 429)
+                elif response.status_code in [400, 429, 500]:
+                    break
+            except Exception:
+                pass
+            time.sleep(2)
+    return False
+```
+
+### C. Customized Character Prompt Configuration
+The visual style is modularly appended to every scene prompt using a style suffix, allowing you to easily swap the character design:
+```python
+style_suffix = (
+    ", simple 2D flat cartoon illustration, minimalist doodle style. "
+    "[INSERT_YOUR_GENERIC_CHARACTER_STYLE_PROMPT_HERE]. "
+    "The background is split by a straight horizontal black dividing line, "
+    "with a solid off-white top half and a solid light tan bottom half. "
+    "Completely flat drawing, thick outlines, no shading, no 3D rendering."
+)
+```
