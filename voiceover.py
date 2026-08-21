@@ -109,6 +109,7 @@ def clone_voice_cartesia(reference_wav=DEFAULT_REFERENCE, api_key=None):
 
 
 import re
+from text_humanizer import humanize_text
 
 def clean_tts_transcript(text):
     if not text:
@@ -125,6 +126,10 @@ def clean_tts_transcript(text):
     meta_pattern = r"\b(stick\s*figures?|stickfigures?|doodles?|illustrations?|on-screen|on screen|narrators?|animations?|drawings?|act\s*\d+|scene\s*\d+)\b"
     text = re.sub(meta_pattern, "", text, flags=re.IGNORECASE)
     text = text.replace('"', '').replace('*', '').strip()
+    
+    # Apply humanization to convert numbers, currencies, dates, & symbols into natural spoken English
+    text = humanize_text(text)
+    
     text = re.sub(r"\s+", " ", text)
     return text
 
