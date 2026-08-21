@@ -566,12 +566,12 @@ def generate_scene_breakdown(script):
     """
     profile = get_profile()
     style_instructions = """
-    PROMPT FORMAT — CLEAN 2D DOODLE STYLE (ALL CHANNELS):
-    1. Scene Composition: Describe 1 or multiple key doodle objects/props relevant to the narration. Keep the composition clean and well-arranged.
-    2. NO CHARACTERS: Do NOT describe stick figures, people, characters, or main presenters. The animated presenter is composited on top separately.
-    3. Art Style: Clean 2D cartoon doodle illustration with thick clean black marker outlines and VIBRANT FLAT SOLID COLOR FILLS for all objects (rich blues, vibrant reds, warm greens, gold — NEVER leave objects white, plain, or uncolored). 100% flat 2D vector style (no 3D, no clay, no heavy gradients).
-    4. Background: Plain solid light neutral color — light cream, pale gray, soft pale blue, or white ONLY. NO purple. NO orange. NO gradients. NO patterns. NO abstract floating shapes or decorative blobs.
-    5. Text: NO text, words, letters, or numbers in the image.
+    PROMPT FORMAT — VIBRANT 2D CARTOON WEBCOMIC ENVIRONMENT STYLE:
+    1. Scene Setting & Environment: Describe a rich, atmospheric 2D background environment and setting matching the narration (e.g. ancient stone temple, glowing cave, high-tech science laboratory, bustling bank vault, starry galaxy, prehistoric savannah). Leave open presentation space in the foreground/center.
+    2. NO CHARACTERS / NO PRESENTER: Do NOT describe stick figures, people, faces, or main presenters. The animated presenter is composited on top separately by our Python animation engine.
+    3. Art Style: Vibrant 2D cartoon webcomic illustration with thick bold clean black marker outlines, flat solid vibrant color fills, and rich dramatic atmospheric lighting (clean 2D vector / storybook style, NO 3D rendering, NO claymation, NO photographic realism).
+    4. Composition: 16:9 widescreen cinematic background composition with depth.
+    5. Clean Image: Strictly NO text, words, letters, labels, or watermarks in the image.
     """
 
     # Split script into paragraphs to group into chunks of ~200 words
