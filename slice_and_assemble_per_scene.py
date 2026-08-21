@@ -16,6 +16,12 @@ from youtube_agent import (
 
 def main():
     proj_dir = get_active_project_dir()
+    if not proj_dir or not os.path.exists(proj_dir):
+        active_json = os.path.join(r"D:\youtube_automation_agent", "active_project.json")
+        if os.path.exists(active_json):
+            with open(active_json, "r", encoding="utf-8") as f:
+                proj_dir = json.load(f).get("active_project_dir")
+
     print(f"==========================================================")
     print(f"PER-SCENE AUDIO SLICING & HARD-LOCKED VIDEO ASSEMBLY")
     print(f"Project: {proj_dir}")

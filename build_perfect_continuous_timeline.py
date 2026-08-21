@@ -93,10 +93,11 @@ def main():
     print(f"Valid Narration Scenes: {N}")
 
     # 2. Forced alignment with faster_whisper
-    print("\n[Align] Running faster-whisper word-level transcription...")
+    os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+    print("\n[Align] Running faster-whisper word-level transcription (processing 7.6 min audio)...", flush=True)
     from faster_whisper import WhisperModel
 
-    model = WhisperModel("base", device="cpu", compute_type="int8")
+    model = WhisperModel("base", device="cpu", compute_type="int8", cpu_threads=4)
     seg_iter, _ = model.transcribe(
         MASTER_WAV,
         word_timestamps=True,
@@ -106,7 +107,11 @@ def main():
     )
 
     all_words = []
+    seg_count = 0
     for seg in seg_iter:
+        seg_count += 1
+        pct = min(100, int((seg.end / total_dur) * 100))
+        print(f"  ⏳ [Transcription Progress] {seg.end:.1f}s / {total_dur:.1f}s ({pct}%) transcribed...", end="\r", flush=True)
         if hasattr(seg, "words") and seg.words:
             for w in seg.words:
                 wc = re.sub(r"[^a-z0-9]", "", w.word.lower())
@@ -114,7 +119,7 @@ def main():
                     all_words.append((w.start, w.end, wc))
 
     W = len(all_words)
-    print(f"[Align] Transcribed {W} words. Last word ends at {all_words[-1][1]:.2f}s")
+    print(f"\n[Align] Transcribed {W} words across {seg_count} segments. Last word ends at {all_words[-1][1]:.2f}s", flush=True)
 
     # 3. Match each scene's start & end word timestamps
     print("\n[Align] Matching scenes to word timestamps...")

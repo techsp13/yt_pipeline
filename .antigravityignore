@@ -1,0 +1,22 @@
+# Media and large output directories
+channels/**
+instagram_reels/**
+Thumbnails/**
+thumbnail_stickman_assets/**
+temp/**
+tmp/**
+output_temp/**
+test_*/**
+*.mp4
+*.mkv
+*.mp3
+*.wav
+*.m4a
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.webp
+__pycache__/**
+.venv/**
+venv/**

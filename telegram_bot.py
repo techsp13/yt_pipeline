@@ -357,8 +357,20 @@ def wait_for_interaction(sent_message_result):
                     # Intercept global /reset, /retry, /rewrite callbacks from the help menu
                     if callback_data in ["/reset", "/retry", "/rewrite"]:
                         print(f"Telegram global interaction received: {callback_data}")
-                        return f"text:{callback_data}"
-                    
+                    # Accept direct action taps (Approve, Reject, Regen, Title, Thumb) on ANY message or photo
+                    is_direct_action = (
+                        callback_data.startswith(("approve_", "reject_", "regen_", "skip_", "edit_", "title:")) or
+                        callback_data in ["approve_all_batch", "approve_all", "regen_thumb", "approve_thumb", "reset_title_text"]
+                    )
+
+                    # For other non-action callbacks, enforce matching message ID to prevent old menu leaks
+                    if valid_message_ids and not is_direct_action:
+                        cb_msg = (cb.get("message") or {}).get("message_id")
+                        if cb_msg not in valid_message_ids:
+                            print(f"[Telegram] Ignoring stale tap '{callback_data}' on "
+                                  f"message {cb_msg} (waiting on {sorted(valid_message_ids)}).")
+                            continue
+
                     # Instantly accept any action callback button tap
                     if callback_data:
                         print(f"Telegram interaction received instantly: {callback_data}")

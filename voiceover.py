@@ -22,16 +22,22 @@ def get_all_cartesia_keys():
     if os.path.exists(env_file):
         with open(env_file, "r", encoding="utf-8") as ef:
             for line in ef:
-                if line.strip().startswith("CARTESIA_API_KEY="):
-                    val = line.strip().split("=", 1)[1].strip().strip('"').strip("'")
-                    if val and val not in keys:
-                        keys.append(val)
+                line_s = line.strip()
+                if line_s.startswith("CARTESIA_API_KEY=") or line_s.startswith("CARTESIA_API_KEYS="):
+                    val = line_s.split("=", 1)[1].strip().strip('"').strip("'")
+                    for k in val.split(","):
+                        k_clean = k.strip()
+                        if k_clean and k_clean not in keys:
+                            keys.append(k_clean)
     for k in KNOWN_CARTESIA_KEYS:
         if k not in keys:
             keys.append(k)
-    env_k = os.getenv("CARTESIA_API_KEY")
-    if env_k and env_k not in keys:
-        keys.append(env_k)
+    env_k = os.getenv("CARTESIA_API_KEY") or os.getenv("CARTESIA_API_KEYS")
+    if env_k:
+        for k in env_k.split(","):
+            k_clean = k.strip()
+            if k_clean and k_clean not in keys:
+                keys.append(k_clean)
     return [k for k in keys if k.startswith("sk_car_")]
 
 
@@ -152,7 +158,7 @@ def generate_speech_cartesia(text, output_path, voice_id=DEFAULT_VOICE_ID, api_k
         }
         
         payload = {
-            "model_id": "sonic-3.5",
+            "model_id": os.getenv("CARTESIA_MODEL", "sonic-2"),
             "transcript": text,
             "language": "en",
             "voice": {

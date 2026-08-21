@@ -13,13 +13,12 @@ from PIL import Image, ImageDraw, ImageFont
 import hf_image_gen
 import stickman_engine
 
-# Font priority — Patrick Hand first
-# Font priority — Heavy impact & bold display fonts first for maximum YouTube CTR
+# Font priority — Patrick Hand first for authentic hand-drawn doodle aesthetic
 FONT_PATHS = [
+    r"D:\youtube_automation_agent\PatrickHand-Regular.ttf",
+    r"C:\Windows\Fonts\comicbd.ttf",
     r"C:\Windows\Fonts\impact.ttf",
     r"C:\Windows\Fonts\ariblk.ttf",
-    r"C:\Windows\Fonts\comicbd.ttf",
-    r"D:\youtube_automation_agent\PatrickHand-Regular.ttf",
     r"C:\Windows\Fonts\arialbd.ttf",
 ]
 
@@ -341,15 +340,15 @@ def generate_thumbnail(
     cap_color: str = "green",
     use_ai: bool = True,
     subject_image_path: str = None,
-    brand_name: str = None
+    brand_name: str = None,
+    include_stickman: bool = False,
+    layout_mode: str = "split"  # "split" (one side text, one side image) or "centered"
 ) -> str:
     """
-    Builds thumbnail with strict PIL zone compositing & 100% AI 2D doodle style consistency:
-    ┌─────────────────────────────────────────────────────┐
-    │           TOP 40%  —  TEXT (full width)             │ Y: 0–288
-    ├──────────────────────────────┬──────────────────────┤
-    │  LEFT 70%  —  AI DOODLE OBJ  │ RIGHT 30%  STICKMAN  │ Y: 288–720
-    └──────────────────────────────┴──────────────────────┘
+    Builds YouTube thumbnail in Pure 2D Doodle Style with Patrick Hand handmade font:
+    - Left Side: Large Patrick Hand Doodle Yellow Text (thick black marker outline + drop shadow)
+    - Right Side: Large Prominent 2D Doodle Subject
+    - Stickman: Omitted by default for clean, high-impact focus
     """
     tmp_obj = output_path.replace(".png", "_obj_tmp.png")
 
@@ -363,17 +362,23 @@ def generate_thumbnail(
     if subject_image_path and os.path.exists(subject_image_path):
         tmp_obj = subject_image_path
     elif use_ai or not prompt:
-        # Generate AI doodle object (square prompt, no positional instructions)
         print(f"[ThumbnailGen] Generating doodle object: '{prompt}'...")
         style = (
             ", clean 2D vector doodle illustration, thick black outlines, "
             "vibrant flat solid color fills, plain light cream background, "
             "single compact centered subject, no text, no humans, no stickman."
         )
-        hf_image_gen.generate_image_hf(prompt + style, tmp_obj)
+        gen_ok = False
+        try:
+            from gflow_assistant import generate_imagen_image
+            gen_ok = generate_imagen_image(prompt + style, tmp_obj, aspect_ratio="16:9")
+        except Exception as e:
+            print(f"[ThumbnailGen] gflow attempt error: {e}")
+        
+        if not gen_ok or not os.path.exists(tmp_obj) or os.path.getsize(tmp_obj) < 1000:
+            print(f"[ThumbnailGen] Falling back to Cloudflare Workers...")
+            hf_image_gen.generate_image_hf(prompt + style, tmp_obj)
     else:
-        # Pure 2D Doodle Mode (Zero AI Generation): Use project scene 2D doodle image
-        print(f"[ThumbnailGen] Pure 2D Doodle Mode (Zero AI Generation)...")
         proj_dir = os.path.dirname(os.path.dirname(os.path.abspath(output_path)))
         sc1_p = os.path.join(proj_dir, "06_Images", "Final", "Scene_01.png")
         if not os.path.exists(sc1_p):
@@ -381,35 +386,193 @@ def generate_thumbnail(
         if os.path.exists(sc1_p):
             tmp_obj = sc1_p
         else:
-            # Fallback to AI gen if local scene image not found
-            hf_image_gen.generate_image_hf(prompt, tmp_obj)
+            gen_ok = False
+            try:
+                from gflow_assistant import generate_imagen_image
+                gen_ok = generate_imagen_image(prompt, tmp_obj, aspect_ratio="16:9")
+            except Exception:
+                pass
+            if not gen_ok or not os.path.exists(tmp_obj):
+                hf_image_gen.generate_image_hf(prompt, tmp_obj)
 
     # 2. Build cream canvas
     canvas = Image.new("RGBA", (W, H), BG_COLOR + (255,))
+    draw = ImageDraw.Draw(canvas)
 
-    # 3. Prepare text layout & draw background banners FIRST (behind stickman head)
-    dummy_draw = ImageDraw.Draw(canvas)
-    layout, font, tracking = _prepare_text_layout(dummy_draw, text_overlay)
-    print(f"[ThumbnailGen] Drawing background banners behind character...")
-    _draw_banners(canvas, layout)
+    # 3. Clean and wrap text for Patrick Hand font (Smart stacking for maximum HUGE font size)
+    text_clean = text_overlay.upper().strip()
+    words = text_clean.split()
+    if len(words) >= 6:
+        # Stack into 3 punchy lines for maximum readability & giant font size
+        p1 = (len(words) + 2) // 3
+        p2 = p1 + (len(words) - p1 + 1) // 2
+        lines = [" ".join(words[:p1]), " ".join(words[p1:p2]), " ".join(words[p2:])]
+    elif len(words) in [4, 5]:
+        p = (len(words) + 1) // 2
+        lines = [" ".join(words[:p]), " ".join(words[p:])]
+    elif len(words) == 3:
+        lines = [words[0], " ".join(words[1:])]
+    else:
+        lines = [text_clean]
 
-    # 4. Paste object → bottom-left zone below text banners (zero text overlay)
-    max_text_y = max(item["banner_box"][3] for item in layout) if layout else OBJ_Y
-    print(f"[ThumbnailGen] Placing object in left zone below text Y:{max_text_y}–{H} (Brand: '{brand_name}')...")
-    _paste_object(canvas, tmp_obj, min_y=max_text_y, brand_name=brand_name)
+    font_path = r"D:\youtube_automation_agent\PatrickHand-Regular.ttf"
+    if not os.path.exists(font_path):
+        font_path = next((p for p in FONT_PATHS if os.path.exists(p)), None)
 
-    # 5. Paste stickman → bottom-right zone (head sits in front of background banner!)
-    print(f"[ThumbnailGen] Placing stickman '{pose_name}' in zone X:{STICK_X}–{W} Y:{OBJ_Y}–{H}...")
-    _paste_stickman(canvas, pose_name, cap=cap, cap_color=cap_color)
+    if layout_mode == "split":
+        # ── SPLIT LAYOUT: ULTRA-LARGE TEXT (LEFT) + PROMINENT OBJECT (RIGHT) ──
+        # Left Text Zone: X: 35 to 595 (width: 560px)
+        # 30px Clean Gap: X: 595 to 625
+        # Right Object Zone: X: 625 to 1260 (width: 635px, height: 680px)
 
-    # 6. Draw text letters ON TOP of everything (100% crisp & legible)
-    print(f"[ThumbnailGen] Drawing text letters on top layer: '{text_overlay}'...")
-    _draw_text_letters(canvas, layout, font, tracking)
+        text_zone_left = 35
+        max_allowed_w = 580
+        font_size = 165
+        font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.load_default()
+
+        # Letter tracking, dedicated word gap, and vertical line gap
+        letter_spacing = max(4, int(font_size * 0.04))
+        word_space = int(font_size * 0.52)   # Spacious, clear separation between words
+        line_gap = int(font_size * 0.28)     # Comfortable vertical gap between lines
+
+        def _get_char_width(ch):
+            if ch == " ":
+                return word_space
+            b = draw.textbbox((0, 0), ch, font=font)
+            return (b[2] - b[0]) + letter_spacing
+
+        def _get_spaced_line_width(txt):
+            if not txt:
+                return 0
+            return sum(_get_char_width(ch) for ch in txt) - letter_spacing
+
+        # Fit font size to maximum readable bounds with word and line spacing
+        for _ in range(40):
+            max_w = max(_get_spaced_line_width(l) for l in lines)
+            line_boxes = [draw.textbbox((0, 0), l, font=font) for l in lines]
+            total_h = sum(b[3] - b[1] for b in line_boxes) + line_gap * (len(lines) - 1)
+            if (max_w <= max_allowed_w and total_h <= H * 0.88) or font_size <= 50:
+                break
+            font_size -= 3
+            font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.load_default()
+            letter_spacing = max(4, int(font_size * 0.04))
+            word_space = int(font_size * 0.52)
+            line_gap = int(font_size * 0.28)
+
+        line_boxes = [draw.textbbox((0, 0), l, font=font) for l in lines]
+        line_heights = [b[3] - b[1] for b in line_boxes]
+        total_text_h = sum(line_heights) + line_gap * (len(lines) - 1)
+        text_start_y = (H - total_text_h) // 2
+
+        # Paste Object in Right Zone (X: 630 to 1260)
+        if os.path.exists(tmp_obj):
+            obj_raw = Image.open(tmp_obj)
+            obj_trans = _make_bg_transparent(obj_raw)
+            bbox = obj_trans.getbbox()
+            if bbox:
+                obj_trans = obj_trans.crop(bbox)
+
+            obj_zone_left = 625
+            avail_obj_w = 635
+            avail_obj_h = int(H * 0.94)  # 676px height
+
+            scale = min(avail_obj_w / obj_trans.width, avail_obj_h / obj_trans.height)
+            new_w, new_h = int(obj_trans.width * scale), int(obj_trans.height * scale)
+            obj_resized = obj_trans.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+            obj_x = obj_zone_left + (avail_obj_w - new_w) // 2
+            obj_y = (H - new_h) // 2
+            canvas.paste(obj_resized, (obj_x, obj_y), obj_resized)
+
+        # Draw Left Side Patrick Hand Extra-Thick Bold Doodle Yellow Text with proper word & line spacing
+        curr_y = text_start_y
+        yellow_fill = (255, 225, 0, 255)
+        black_outline = (0, 0, 0, 255)
+        shadow_color = (0, 0, 0, 100)
+
+        # Multi-layer bold rendering: fattens the font itself + gives a clean crisp outline
+        bold_core_stroke = max(4, int(font_size * 0.040))     # Fattens yellow letter body
+        black_contour_stroke = bold_core_stroke + max(3, int(font_size * 0.025))  # Clean black border
+
+        for i, line in enumerate(lines):
+            lw = _get_spaced_line_width(line)
+            lx = text_zone_left + (max_allowed_w - lw) // 2
+
+            # 1. Soft drop shadow pass (offset 5, 5)
+            cx = lx + 5
+            cy = curr_y + 5
+            for ch in line:
+                if ch != " ":
+                    draw.text((cx, cy), ch, font=font, fill=shadow_color, stroke_width=black_contour_stroke, stroke_fill=shadow_color)
+                cx += _get_char_width(ch)
+
+            # 2. Black contour outline pass
+            cx = lx
+            for ch in line:
+                if ch != " ":
+                    draw.text((cx, curr_y), ch, font=font, fill=black_outline, stroke_width=black_contour_stroke, stroke_fill=black_outline)
+                cx += _get_char_width(ch)
+
+            # 3. Extra-Thick Bold Yellow Core pass (fattens the font body)
+            cx = lx
+            for ch in line:
+                if ch != " ":
+                    draw.text((cx, curr_y), ch, font=font, fill=yellow_fill, stroke_width=bold_core_stroke, stroke_fill=yellow_fill)
+                cx += _get_char_width(ch)
+
+            curr_y += line_heights[i] + line_gap
+
+    else:
+        # ── CENTERED LAYOUT: TOP TEXT, CENTER IMAGE ──
+        font_size = 110
+        font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.load_default()
+        for _ in range(25):
+            max_w = max(draw.textbbox((0, 0), l, font=font)[2] - draw.textbbox((0, 0), l, font=font)[0] for l in lines)
+            if max_w < W * 0.90 or font_size <= 30:
+                break
+            font_size -= 4
+            font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.load_default()
+
+        line_heights = [draw.textbbox((0, 0), l, font=font)[3] - draw.textbbox((0, 0), l, font=font)[1] for l in lines]
+        total_text_h = sum(line_heights) + (len(lines) - 1) * 15
+        text_start_y = 35
+
+        if os.path.exists(tmp_obj):
+            obj_raw = Image.open(tmp_obj)
+            obj_trans = _make_bg_transparent(obj_raw)
+            avail_obj_h = H - (text_start_y + total_text_h + 30) - 20
+            avail_obj_w = int(W * 0.85)
+
+            scale = min(avail_obj_w / obj_trans.width, avail_obj_h / obj_trans.height)
+            new_w, new_h = int(obj_trans.width * scale), int(obj_trans.height * scale)
+            obj_resized = obj_trans.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+            obj_x = (W - new_w) // 2
+            obj_y = text_start_y + total_text_h + 20 + max(0, (avail_obj_h - new_h) // 2)
+            canvas.paste(obj_resized, (obj_x, obj_y), obj_resized)
+
+        curr_y = text_start_y
+        for i, line in enumerate(lines):
+            bb = draw.textbbox((0, 0), line, font=font)
+            lw = bb[2] - bb[0]
+            lh = bb[3] - bb[1]
+            lx = (W - lw) // 2
+
+            draw.text((lx + 6, curr_y + 6), line, font=font, fill=(0, 0, 0, 180), stroke_width=8, stroke_fill=(0, 0, 0, 180))
+            draw.text((lx, curr_y), line, font=font, fill=(255, 230, 0, 255), stroke_width=8, stroke_fill=(0, 0, 0, 255))
+            curr_y += lh + 15
+
+    # 4. Optional Stickman
+    if include_stickman:
+        _paste_stickman(canvas, pose_name, cap=cap, cap_color=cap_color)
 
     # Save and clean up
     canvas.convert("RGB").save(output_path, "PNG", quality=95)
-    if os.path.exists(tmp_obj):
-        os.remove(tmp_obj)
+    if os.path.exists(tmp_obj) and tmp_obj != subject_image_path:
+        try:
+            os.remove(tmp_obj)
+        except Exception:
+            pass
 
     print(f"[ThumbnailGen] SUCCESS! Saved to {output_path}")
     return output_path

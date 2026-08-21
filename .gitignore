@@ -16,6 +16,7 @@ worker_state.json
 gemini_key_state.json
 .gflow_project_id
 .gflow_current_profile
+.gflow_active_project
 crash.log
 *.log
 run_debug*

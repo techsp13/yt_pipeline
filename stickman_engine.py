@@ -532,20 +532,6 @@ def anim_shrug(cx=540, cy=1380, s=1.0):
     ]
 
 
-def anim_jump(cx=540, cy=1380, s=1.0):
-    b = dict(cx=cx, cy=cy, scale=s, expression="big_smile")
-    return [
-        Keyframe(6,  Pose(**b, l_hip=-12, r_hip=12, l_knee=-25, r_knee=25,
-                          l_shoulder=-28, r_shoulder=28, bob=0)),
-        Keyframe(8,  Pose(**b, l_hip=-25, r_hip=25, l_knee=-5, r_knee=5,
-                          l_shoulder=-85, r_shoulder=85, l_elbow=-25, r_elbow=25, bob=-130)),
-        Keyframe(4,  Pose(**b, l_hip=-18, r_hip=18, l_knee=-35, r_knee=35,
-                          l_shoulder=-28, r_shoulder=28, bob=0)),
-        Keyframe(8,  Pose(**b, l_hip=-12, r_hip=12, l_knee=-5, r_knee=5,
-                          l_shoulder=-28, r_shoulder=28, l_elbow=-20, r_elbow=20)),
-    ]
-
-
 def anim_clap(cx=540, cy=1380, s=1.0):
     b = dict(cx=cx, cy=cy, scale=s, expression="big_smile",
              l_hip=-12, r_hip=12, l_knee=-5, r_knee=5)
@@ -923,7 +909,6 @@ ANIMATIONS = {
     "count_fingers":      anim_count_fingers,
     "lean_forward":       anim_lean_forward,
     "shrug":              anim_shrug,
-    "jump":               anim_jump,
     "clap":               anim_clap,
     "celebrate":          anim_celebrate,
     "talk":               anim_talk,
@@ -997,10 +982,11 @@ _MOOD_MAP = {
 }
 
 # Mood → gesture candidates (picked randomly for each scene)
+# Note: 'celebrate', 'hands_hips', 'money_rain', 'open_arms' have been removed per user preference.
 _MOOD_GESTURES = {
-    "energetic": ["celebrate", "talk_energetic", "open_arms", "clap", "wave", "peace_sign", "mic_drop"],
-    "surprise":  ["surprise", "mind_blown", "open_arms", "shrug", "point_up"],
-    "mind_blown":["mind_blown", "surprise", "open_arms", "head_nod"],
+    "energetic": ["talk_energetic", "clap", "wave", "peace_sign", "mic_drop"],
+    "surprise":  ["surprise", "mind_blown", "shrug", "point_up"],
+    "mind_blown":["mind_blown", "surprise", "head_nod"],
     "serious":   ["point", "point_up", "confident_stance", "crossed_arms", "lean_forward", "stop_hand"],
     "stop":      ["stop_hand", "crossed_arms", "point"],
     "sad":       ["sad", "frustrated", "facepalm", "shrug", "crossed_arms"],
@@ -1009,9 +995,9 @@ _MOOD_GESTURES = {
     "whisper":   ["whisper", "think", "lean_forward"],
     "angry":     ["angry", "frustrated", "stop_hand"],
     "investigate":["detective_magnify", "looking_far", "think", "reading_book"],
-    "positive":  ["nod", "thumbs_up", "palm_up", "confident_stance", "wave", "celebrate", "peace_sign"],
-    "wealth":    ["money_rain", "thumbs_up", "celebrate", "palm_up"],
-    "flex":      ["flexing", "thumbs_up", "celebrate", "peace_sign"],
+    "positive":  ["nod", "thumbs_up", "palm_up", "confident_stance", "wave", "peace_sign"],
+    "wealth":    ["thumbs_up", "palm_up", "confident_stance", "explain_two_hands"],
+    "flex":      ["flexing", "thumbs_up", "peace_sign"],
     "compare":   ["explain_two_hands", "point_left", "point", "count_fingers"],
     "teaching":  ["count_fingers", "writing_board", "point_up", "explain_two_hands", "palm_up", "point"],
     "confused":  ["shrug", "facepalm", "think", "lean_forward"],
@@ -1023,6 +1009,7 @@ _MOOD_GESTURES = {
 # Walking positions
 _WALK_ZONES = [300, 430, 540, 650, 780]  # cx values in stickman canvas (0–1080)
 
+_EXCLUDED_GESTURES = {"celebrate", "hands_hips", "money_rain", "open_arms"}
 
 def _pick_mood(text: str) -> str:
     words = text.lower().split()
@@ -1035,9 +1022,13 @@ def _pick_mood(text: str) -> str:
 
 def _pick_gesture(mood: str, exclude: str = None) -> str:
     candidates = _MOOD_GESTURES.get(mood, _MOOD_GESTURES["neutral"])
-    if exclude and len(candidates) > 1:
-        candidates = [c for c in candidates if c != exclude]
-    return random.choice(candidates)
+    # Filter out excluded gestures
+    valid_candidates = [c for c in candidates if c not in _EXCLUDED_GESTURES]
+    if not valid_candidates:
+        valid_candidates = [c for c in _MOOD_GESTURES["neutral"] if c not in _EXCLUDED_GESTURES]
+    if exclude and len(valid_candidates) > 1:
+        valid_candidates = [c for c in valid_candidates if c != exclude]
+    return random.choice(valid_candidates)
 
 
 def _apply_talking(poses: List[Pose]) -> List[Pose]:

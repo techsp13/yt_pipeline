@@ -27,7 +27,13 @@ def is_pid_running(pid):
         if not pid or not str(pid).isdigit():
             return False
         out = subprocess.check_output(f'tasklist /FI "PID eq {pid}" /FO CSV', shell=True, text=True)
-        return str(pid) in out
+        # Exact-match the PID column (CSV rows look like: "python.exe","1234","Console",...)
+        # so a dead-pid substring can never be mistaken for a live one.
+        for line in out.splitlines()[1:]:
+            parts = line.split('","')
+            if len(parts) >= 2 and parts[1].strip('"') == str(pid):
+                return True
+        return False
     except Exception:
         return False
 
@@ -35,6 +41,7 @@ def release_single_instance_lock():
     global _lock_fp
     if _lock_fp:
         try:
+            _lock_fp.seek(0)
             msvcrt.locking(_lock_fp.fileno(), msvcrt.LK_UNLCK, 1)
             _lock_fp.close()
         except Exception:
@@ -48,54 +55,78 @@ def release_single_instance_lock():
 
 def acquire_single_instance_lock():
     global _lock_fp
-    for attempt in range(30):
-        if os.path.exists(LOCK_FILE_PATH):
-            try:
-                with open(LOCK_FILE_PATH, "r") as f:
-                    old_pid = f.read().strip()
-                if not old_pid or old_pid == str(os.getpid()) or not is_pid_running(old_pid) or os.environ.get("PIPELINE_RESTARTED") == "1":
-                    try:
-                        if _lock_fp:
-                            try:
-                                msvcrt.locking(_lock_fp.fileno(), msvcrt.LK_UNLCK, 1)
-                                _lock_fp.close()
-                            except Exception:
-                                pass
-                            _lock_fp = None
-                        os.remove(LOCK_FILE_PATH)
-                    except Exception:
-                        pass
-            except Exception:
+
+    if os.environ.get("BYPASS_SINGLE_INSTANCE") == "1" or "--force" in sys.argv:
+        print("[Single Instance Guard] Bypass flag active. Bypassing lock check...")
+        return True
+
+    is_restarted = os.environ.get("PIPELINE_RESTARTED") == "1"
+
+    # Step 1: Check if existing lock file belongs to US or a DEAD process. If so, clean up.
+    if os.path.exists(LOCK_FILE_PATH):
+        try:
+            with open(LOCK_FILE_PATH, "r") as f:
+                old_pid = f.read().strip()
+            if is_restarted or old_pid == str(os.getpid()) or not old_pid or not is_pid_running(old_pid):
                 try:
                     os.remove(LOCK_FILE_PATH)
                 except Exception:
                     pass
+        except Exception:
+            pass
 
+    # Step 2: Acquire OS file lock
+    try:
+        _lock_fp = open(LOCK_FILE_PATH, "a+")
+        _lock_fp.seek(0)
+        msvcrt.locking(_lock_fp.fileno(), msvcrt.LK_NBLCK, 1)
+        _lock_fp.seek(0)
+        _lock_fp.truncate(0)
+        _lock_fp.write(str(os.getpid()))
+        _lock_fp.flush()
+        print(f"[Single Instance Guard] Acquired lock for PID {os.getpid()}.")
+        return True
+    except (IOError, OSError):
+        # Double-check if holder PID belongs to OUR OWN process PID or post-restart
         try:
-            _lock_fp = open(LOCK_FILE_PATH, "w")
-            msvcrt.locking(_lock_fp.fileno(), msvcrt.LK_NBLCK, 1)
-            _lock_fp.write(str(os.getpid()))
-            _lock_fp.flush()
-            return True
-        except (IOError, OSError):
-            if attempt >= 5 and os.path.exists(LOCK_FILE_PATH):
-                try:
-                    with open(LOCK_FILE_PATH, "r") as f:
-                        pid_check = f.read().strip()
-                    if not pid_check or pid_check == str(os.getpid()) or not is_pid_running(pid_check):
-                        try:
-                            os.remove(LOCK_FILE_PATH)
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-            time.sleep(0.15)
+            with open(LOCK_FILE_PATH, "r") as f:
+                holder_check = f.read().strip()
+            if is_restarted or holder_check == str(os.getpid()):
+                print(f"[Single Instance Guard] Lock confirmed for self PID {os.getpid()}. Proceeding...")
+                return True
+        except Exception:
+            pass
 
-    print("[Single Instance Guard] Duplicate process prevented.")
-    sys.exit(0)
+        if _lock_fp:
+            try:
+                _lock_fp.close()
+            except Exception:
+                pass
+            _lock_fp = None
 
-if os.environ.get("BYPASS_SINGLE_INSTANCE") != "1":
-    acquire_single_instance_lock()
+        holder = "unknown"
+        try:
+            with open(LOCK_FILE_PATH, "r") as f:
+                holder = f.read().strip() or "unknown"
+        except Exception:
+            holder = "another running instance"
+
+        # Double-check if holder process is dead; if dead, remove lock and take over
+        if holder != "unknown" and holder.isdigit() and not is_pid_running(holder):
+            try:
+                os.remove(LOCK_FILE_PATH)
+                print(f"[Single Instance Guard] Stale PID {holder} dead. Cleaned lock. Retrying...")
+                return acquire_single_instance_lock()
+            except Exception:
+                pass
+
+        print(f"[Single Instance Guard] Duplicate process prevented (lock held by active PID {holder}).")
+        print("💡 Tip: If you want to bypass this check, set BYPASS_SINGLE_INSTANCE=1 or pass --force")
+        sys.exit(0)
+
+if __name__ == "__main__":
+    if os.environ.get("BYPASS_SINGLE_INSTANCE") != "1":
+        acquire_single_instance_lock()
 
 # Import our helper modules
 import telegram_bot
@@ -1117,14 +1148,22 @@ def build_vertical_scene_video(image_path, audio_path, output_path, narration=""
 
     def prepare_bg_np(p):
         try:
-            img = Image.open(p).convert("RGBA")
+            img = Image.open(p).convert("RGB")
             iw, ih = img.size
-            if iw / ih > BG_W / BG_H:
-                new_w = int(ih * BG_W / BG_H)
-                x0 = (iw - new_w) // 2
-                img = img.crop((x0, 0, x0 + new_w, ih))
-            img = img.resize((BG_W, BG_H), Image.LANCZOS)
-            return np.array(img.convert("RGB"))
+            if abs(iw / ih - BG_W / BG_H) < 0.05:
+                # Native 9:16 image
+                img_resized = img.resize((BG_W, BG_H), Image.LANCZOS)
+                return np.array(img_resized)
+            else:
+                # 16:9 or non-vertical image: fit full width and pad seamlessly
+                bg_color = img.getpixel((8, 8))
+                fit_w = BG_W
+                fit_h = int(ih * (BG_W / iw))
+                img_fit = img.resize((fit_w, fit_h), Image.LANCZOS)
+                canvas = Image.new("RGB", (BG_W, BG_H), bg_color)
+                paste_y = max(0, (BG_H - fit_h) // 2 - 60)
+                canvas.paste(img_fit, (0, paste_y))
+                return np.array(canvas)
         except Exception:
             return None
 
@@ -1272,7 +1311,11 @@ def generate_short_video(state):
                     with open(script_p, "r", encoding="utf-8") as f:
                         script_txt = f.read()
 
-            breakdown_text = creative_assistant.generate_short_breakdown(script_txt)
+            breakdown_text = creative_assistant.generate_short_breakdown(
+                script_txt,
+                topic=state.get("topic", ""),
+                title=state.get("title", "")
+            )
             cleaned_text = breakdown_text.strip()
             if cleaned_text.startswith("```"):
                 cleaned_text = re.sub(r"^```(?:json)?\n|```$", "", cleaned_text, flags=re.MULTILINE).strip()
@@ -1457,15 +1500,31 @@ def generate_short_video(state):
         narration = scene.get("narration", "")
         img_scene_num = int(scene.get("image_scene", idx + 1))
 
-        # Assign 100% UNIQUE approved image for this scene
+        # Assign 100% UNIQUE 9:16 vertical image for this short scene
         approved_file = state["approved_short_scenes"].get(scene_key)
+        version1_path = os.path.join(short_images_dir, f"Short_Scene_{scene_key}_v1.png")
+
         if approved_file and approved_file != "skipped_use_fallback":
             image_path = os.path.join(short_images_dir, approved_file)
+        elif os.path.exists(version1_path):
+            image_path = version1_path
         else:
-            num_str = f"{img_scene_num:02d}"
-            image_path = os.path.join(proj_dir, "06_Images", "Final", f"Scene_{num_str}.png")
-            if not os.path.exists(image_path):
-                image_path = os.path.join(proj_dir, "06_Images", "Approved", f"Scene_{num_str}.png")
+            # Auto-generate native 9:16 vertical image for this short scene
+            short_vertical_suffix = (
+                ". 9:16 vertical clean 2D cartoon doodle illustration. "
+                "STYLE & COLOR: Pure 2D flat doodle cartoon objects with thick clean black marker outlines. "
+                "100% flat 2D vector style, clean flat colors. Plain solid light neutral background."
+            )
+            full_prompt = (scene.get("image_prompt") or narration) + short_vertical_suffix
+            print(f"[Shorts] Generating native 9:16 vertical image for Short Scene V{scene_key}...")
+            gen_ok = generate_image_hf_vertical(full_prompt, version1_path)
+            if gen_ok and os.path.exists(version1_path):
+                image_path = version1_path
+            else:
+                num_str = f"{img_scene_num:02d}"
+                image_path = os.path.join(proj_dir, "06_Images", "Final", f"Scene_{num_str}.png")
+                if not os.path.exists(image_path):
+                    image_path = os.path.join(proj_dir, "06_Images", "Approved", f"Scene_{num_str}.png")
             if not os.path.exists(image_path) and idx < len(approved_img_pool):
                 image_path = approved_img_pool[idx]
             if not os.path.exists(image_path) and approved_img_pool:
@@ -1702,9 +1761,15 @@ def create_final_deliverables(state):
         print("\n🎨 Automated YouTube Thumbnail Generation (Final Step)...")
         scene_list_path = os.path.join(proj_dir, "04_Scenes", "Scene_List.json")
         thumb_dir = os.path.join(proj_dir, "12_Thumbnail")
-        os.makedirs(thumb_dir, exist_ok=True)
         thumb_path = os.path.join(thumb_dir, "Thumbnail.png")
         root_thumb_path = os.path.join(proj_dir, "Thumbnail.png")
+
+        # Skip interactive prompt if valid Thumbnail.png is already approved & saved
+        if os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 5000:
+            print(f"[Deliverables] Valid approved Thumbnail.png already exists ({os.path.getsize(thumb_path)//1024} KB). Skipping interactive prompt...")
+            shutil.copyfile(thumb_path, root_thumb_path)
+            telegram_bot.send_message(f"✅ *Thumbnail Already Approved!* Using existing high-quality thumbnail.")
+            return True
 
         channel_cfg = get_channel_config()
         channel_name = channel_cfg.get("profile", channel_cfg.get("name", "history")).lower()
@@ -2684,7 +2749,7 @@ def run_workflow():
                 print(f"[Step 6] Batch {batch_num}/{total_batches} (Scenes {batch[0]['num']}..{batch[-1]['num']}) already approved. Skipping...")
                 continue
 
-            telegram_bot.send_message(f"🖼️ *Batch {batch_num}/{total_batches}: Generating Scenes {batch[0]['num']}..{batch[-1]['num']} via Cloudflare Workers API...*")
+            telegram_bot.send_message(f"🖼️ *Batch {batch_num}/{total_batches}: Generating Scenes {batch[0]['num']}..{batch[-1]['num']} via Google Imagen (gflow)...*")
 
             # Phase 1: Skip approved images and generate ONLY missing unapproved images
             for item in batch:
@@ -2702,8 +2767,14 @@ def run_workflow():
                 and (not os.path.exists(item["output_path"]) or os.path.getsize(item["output_path"]) < 1000)
             ]
             if missing_batch:
-                print(f"[Step 6] Concurrently generating {len(missing_batch)} missing unapproved images in batch {batch_num}/{total_batches} via Cloudflare Workers Pool...")
-                generate_batch_hf(missing_batch)
+                print(f"[Step 6] Concurrently generating {len(missing_batch)} missing unapproved images in batch {batch_num}/{total_batches} via Google Flow (gflow 3x pool)...")
+                try:
+                    from gflow_assistant import generate_batch_imagen_images
+                    generate_batch_imagen_images(missing_batch, img_dir, aspect_ratio="16:9")
+                except Exception as e:
+                    print(f"[Step 6] gflow batch exception: {e}. Falling back to Cloudflare Workers...")
+                    generate_batch_hf(missing_batch)
+
                 from image_text_overlay import overlay_text_labels
                 for item in missing_batch:
                     num = item["num"]
@@ -2713,7 +2784,7 @@ def run_workflow():
                         if labels:
                             overlay_text_labels(item["output_path"], labels)
                         checkpoints[num] = {
-                            "worker_api": "cloudflare_workers",
+                            "worker_api": "google_imagen_gflow",
                             "scene_number": num,
                             "filename": item["padded_filename"],
                             "status": "pending",
@@ -2723,17 +2794,25 @@ def run_workflow():
                     json.dump(checkpoints, f, indent=4)
 
             # Phase 1.5: ABSOLUTE RECOVERY GUARANTEE — Ensure 100% of images exist on disk before Telegram dispatch
+            from gflow_assistant import generate_imagen_image
             from hf_image_gen import generate_image_hf, reset_worker_state
             for item in batch:
                 num = item["num"]
                 img_p = item["output_path"]
                 retry_cnt = 0
-                while (not os.path.exists(img_p) or os.path.getsize(img_p) < 1000) and retry_cnt < 5:
+                while (not os.path.exists(img_p) or os.path.getsize(img_p) < 1000) and retry_cnt < 3:
                     retry_cnt += 1
-                    print(f"[Step 6 Recovery Guarantee] Scene V{num} image missing (Attempt {retry_cnt}/5). Generating now...")
-                    reset_worker_state()
-                    generate_image_hf(item["prompt"], img_p, aspect_ratio="16:9")
-                    time.sleep(1)
+                    print(f"[Step 6 Recovery Guarantee] Scene V{num} image missing (Attempt {retry_cnt}/3). Generating via gflow...")
+                    success = False
+                    try:
+                        success = generate_imagen_image(item["prompt"], img_p, aspect_ratio="16:9")
+                    except Exception:
+                        pass
+                    if not success or not os.path.exists(img_p) or os.path.getsize(img_p) < 1000:
+                        print(f"[Step 6 Recovery Fallback] Generating Scene V{num} via Cloudflare Workers...")
+                        reset_worker_state()
+                        generate_image_hf(item["prompt"], img_p, aspect_ratio="16:9")
+                    time.sleep(0.5)
 
             # Phase 2: Send the images to Telegram in albums of 5
             telegram_bot.send_message(f"📸 *Batch {batch_num}/{total_batches} Ready! (Scenes {batch[0]['num']}..{batch[-1]['num']})*\nReview images below:")
@@ -2796,8 +2875,15 @@ def run_workflow():
 
                 # Handle Individual Button Clicks: approve_XX or reject_XX
                 elif choice.startswith("approve_"):
-                    n = choice.split("approve_", 1)[1].strip()
-                    if any(b["num"] == n for b in batch):
+                    n_raw = choice.split("approve_", 1)[1].strip()
+                    try:
+                        n_int = int(n_raw)
+                        matched_item = next((b for b in batch if int(b["num"]) == n_int), None)
+                    except ValueError:
+                        matched_item = next((b for b in batch if b["num"] == n_raw), None)
+
+                    if matched_item:
+                        n = matched_item["num"]
                         batch_approved_set.add(n)
                         checkpoints[n] = checkpoints.get(n, {})
                         checkpoints[n]["status"] = "approved"
@@ -2808,10 +2894,16 @@ def run_workflow():
                 elif choice == "__regen_handled__":
                     pass  # Instant regen already completed in get_user_interaction; skip batch re-processing
 
-                elif choice.startswith("reject_"):
-                    t_num = choice.split("reject_", 1)[1].strip()
-                    target = next((item for item in batch if item["num"] == t_num), None)
+                elif choice.startswith("reject_") or choice.startswith("regen_"):
+                    t_raw = re.sub(r"^(reject_|regen_)", "", choice).strip()
+                    try:
+                        t_int = int(t_raw)
+                        target = next((item for item in batch if int(item["num"]) == t_int), None)
+                    except ValueError:
+                        target = next((item for item in batch if item["num"] == t_raw), None)
+
                     if target:
+                        t_num = target["num"]
                         if t_num in batch_approved_set:
                             batch_approved_set.remove(t_num)
                         if os.path.exists(target["output_path"]):
@@ -2826,9 +2918,14 @@ def run_workflow():
                         _REGEN_LOCK.add(t_num)
 
                         gen_prompt = target["prompt"] + f" (Seed variation {random.randint(10000,999999)}, new dynamic composition)"
-                        telegram_bot.send_message(f"🔄 *Regenerating Scene V{t_num}...*")
+                        telegram_bot.send_message(f"🔄 *Regenerating Scene V{t_num} via Google Imagen (gflow)...*")
                         try:
-                            generate_image_hf(gen_prompt, target["output_path"], aspect_ratio="16:9")
+                            from gflow_assistant import generate_imagen_image
+                            success = generate_imagen_image(gen_prompt, target["output_path"], aspect_ratio="16:9")
+                            if not success or not os.path.exists(target["output_path"]) or os.path.getsize(target["output_path"]) < 1000:
+                                print(f"[Regen Fallback] Falling back to Cloudflare Workers for V{t_num}...")
+                                generate_image_hf(gen_prompt, target["output_path"], aspect_ratio="16:9")
+                            
                             if os.path.exists(target["output_path"]):
                                 # Apply PIL text overlay for accurate spelling
                                 from image_text_overlay import overlay_text_labels
@@ -2836,7 +2933,7 @@ def run_workflow():
                                 if labels:
                                     overlay_text_labels(target["output_path"], labels)
                                 checkpoints[t_num] = {
-                                    "worker_api": "cloudflare_workers",
+                                    "worker_api": "google_imagen_gflow",
                                     "scene_number": t_num,
                                     "filename": target["padded_filename"],
                                     "status": "pending",

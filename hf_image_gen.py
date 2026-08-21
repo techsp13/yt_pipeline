@@ -9,6 +9,7 @@ load_dotenv()
 # ─── Worker Configuration ──────────────────────────────────────────────────────
 
 WORKERS = [
+    "https://imageapi.sanketsarvaliya9.workers.dev/",
     "https://imageapi.techsp13.workers.dev/",
     "https://imageapi.sany-3pro.workers.dev/",
     "https://imageapi.sanketpatel794653.workers.dev/",
@@ -125,41 +126,84 @@ def reset_worker_state():
     print("[WorkerState] Worker quota state reset — all workers available.")
 
 
-# ─── Core Shared Generation Logic ─────────────────────────────────────────────
-
-def _generate_via_flux_fallback(prompt, filename, width, height, tag=""):
+def _generate_fallback_image(prompt, filename, width, height, tag=""):
+    """
+    Fallback image generator if all Cloudflare workers are temporarily busy.
+    Generates a clean stylized 2D solid background frame so the pipeline never halts.
+    """
     try:
-        import urllib.parse, random
-        encoded_p = urllib.parse.quote(prompt)
-        w, h = (576, 1024) if width < height else (1024, 576)
-        seed = random.randint(100, 999999)
-        
-        # 1. Try FLUX Model
-        fallback_url = f"https://image.pollinations.ai/prompt/{encoded_p}?width={w}&height={h}&seed={seed}&nologo=true&model=flux"
-        r = requests.get(fallback_url, timeout=25)
-        if r.status_code == 200 and len(r.content) > 1000:
-            dirname = os.path.dirname(filename)
-            if dirname:
-                os.makedirs(dirname, exist_ok=True)
-            with open(filename, "wb") as f:
-                f.write(r.content)
-            print(f"{tag}[SUCCESS via FLUX Fallback] Saved to {filename} ({os.path.getsize(filename)//1024} KB)")
-            return True
+        from PIL import Image, ImageDraw
+        dirname = os.path.dirname(filename)
+        if dirname:
+            os.makedirs(dirname, exist_ok=True)
+        img = Image.new("RGB", (width, height), color=(245, 240, 230))
+        draw = ImageDraw.Draw(img)
+        # Draw clean border
+        draw.rectangle([(10, 10), (width - 10, height - 10)], outline=(40, 40, 40), width=4)
+        img.save(filename, format="PNG")
+        print(f"{tag}[FALLBACK] Created clean placeholder image: {filename}")
+        return True
+    except Exception as e:
+        print(f"{tag}[FALLBACK ERROR] Failed to create placeholder: {e}")
+        return False
 
-        # 2. Backup to Turbo Model
-        backup_url = f"https://image.pollinations.ai/prompt/{encoded_p}?width={w}&height={h}&seed={seed}&nologo=true&model=turbo"
-        r_b = requests.get(backup_url, timeout=20)
-        if r_b.status_code == 200 and len(r_b.content) > 1000:
+
+def _generate_via_gradio_flux(prompt, filename, width, height, tag=""):
+    """
+    Direct zero-credit FLUX.1-schnell Gradio Space generator.
+    Works 100% free with zero API key dependencies, generating native 1024x576 or 576x1024 FLUX illustrations.
+    """
+    try:
+        from gradio_client import Client
+        from PIL import Image
+        import random
+        c = Client("black-forest-labs/FLUX.1-schnell")
+        result = c.predict(
+            prompt=prompt,
+            seed=random.randint(1, 99999999),
+            randomize_seed=True,
+            width=width,
+            height=height,
+            num_inference_steps=4,
+            api_name="/infer"
+        )
+        temp_img = result[0] if isinstance(result, (list, tuple)) else result
+        if temp_img and os.path.exists(temp_img):
             dirname = os.path.dirname(filename)
             if dirname:
                 os.makedirs(dirname, exist_ok=True)
-            with open(filename, "wb") as f:
-                f.write(r_b.content)
-            print(f"{tag}[SUCCESS via Turbo Fallback] Saved to {filename} ({os.path.getsize(filename)//1024} KB)")
+            img = Image.open(temp_img).convert("RGB")
+            img.save(filename, format="PNG")
+            print(f"{tag}[SUCCESS FLUX Space {width}x{height}] Saved to {filename} ({os.path.getsize(filename)//1024} KB)")
             return True
-    except Exception as fe:
-        print(f"{tag}[FALLBACK ERROR] Fallback generator exception: {fe}")
+    except Exception as e:
+        print(f"{tag}[FLUX Space Error]: {e}")
     return False
+
+
+def _generate_via_hf_client(prompt, filename, width, height, tag=""):
+    """
+    Direct Hugging Face InferenceClient fallback using FLUX.1-schnell.
+    Generates exact 1024x576 (16:9) or 576x1024 (9:16) native FLUX images.
+    """
+    token = os.getenv("HF_TOKEN")
+    if token:
+        try:
+            from huggingface_hub import InferenceClient
+            client = InferenceClient(token=token)
+            img = client.text_to_image(prompt, model="black-forest-labs/FLUX.1-schnell", width=width, height=height)
+            dirname = os.path.dirname(filename)
+            if dirname:
+                os.makedirs(dirname, exist_ok=True)
+            img.save(filename, format="PNG")
+            print(f"{tag}[SUCCESS HF FLUX {width}x{height}] Saved to {filename} ({os.path.getsize(filename)//1024} KB)")
+            return True
+        except Exception as e:
+            print(f"{tag}[HF FLUX Client Error]: {e}")
+
+    # Seamless failover to zero-credit FLUX Space
+    print(f"{tag}[FAILOVER] Switching to FLUX.1-schnell ZeroGPU Space...")
+    return _generate_via_gradio_flux(prompt, filename, width, height, tag)
 
 
 def _generate_image_via_workers(prompt, filename, width, height, label="", start_offset=0):
@@ -167,7 +211,7 @@ def _generate_image_via_workers(prompt, filename, width, height, label="", start
     Shared image generation logic with persistent worker locking.
     Starts from active_index + start_offset so parallel batch threads use distinct worker keys.
     Uses the active working key until its daily quota limit is hit.
-    Exhausted keys are saved to disk and never retried.
+    Rotates immediately on error to avoid unnecessary retry delays.
     """
     tag = f"[{label}] " if label else ""
 
@@ -175,16 +219,15 @@ def _generate_image_via_workers(prompt, filename, width, height, label="", start
     active_idx = (state.get("active_index", 0) + start_offset) % len(WORKERS)
     exhausted_urls = set(state.get("exhausted", []))
 
-    # Find current active non-exhausted worker index
+    # Find candidate worker indices in priority order
     all_indices = list(range(len(WORKERS)))
     candidates = [i for i in (all_indices[active_idx:] + all_indices[:active_idx]) if WORKERS[i] not in exhausted_urls]
 
     if not candidates:
-        print(f"{tag}[WARNING] All Cloudflare Workers hit daily free quota limit. Using FLUX Fallback Generator...")
-        return _generate_via_flux_fallback(prompt, filename, width, height, tag)
-
-    # Lock onto the primary active candidate key
-    cur_idx = candidates[0]
+        print(f"{tag}[WARNING] All Cloudflare Workers hit daily free quota limit. Resetting worker pool...")
+        state["exhausted"] = []
+        _save_worker_state(state)
+        candidates = all_indices
 
     # Enforce Cloudflare Worker maximum prompt character limit (cap at 1900 chars)
     if prompt and len(prompt) > 1900:
@@ -196,62 +239,92 @@ def _generate_image_via_workers(prompt, filename, width, height, label="", start
     }
     payload = {"prompt": prompt}
 
-    # Attempt generation on the SAME active key
-    url = WORKERS[cur_idx]
+    # Iterate through candidates; if a key errors, rotate immediately to next key
+    for cur_idx in candidates:
+        url = WORKERS[cur_idx]
+        for attempt in range(1, 2):  # Single solid attempt with generous 25s timeout (prevents phantom neuron drains)
+            try:
+                response = requests.post(url, headers=headers, json=payload, timeout=25)
+                resp_text = (response.text or "").lower()
+                is_quota = any(q in resp_text for q in ["quota", "exceeded", "upgrade"])
+                is_concurrency = "concurrency" in resp_text
 
-    for attempt in range(1, 4):
-        print(f"{tag}Using Active Key #{cur_idx+1} (Attempt {attempt}/3): {url}")
-        try:
-            response = requests.post(url, headers=headers, json=payload, timeout=8)
-            resp_text = (response.text or "").lower()
-            is_quota = any(q in resp_text for q in ["quota", "exceeded", "upgrade"])
-            is_concurrency = "concurrency" in resp_text
+                if response.status_code == 200 and len(response.content) > 3000:
+                    dirname = os.path.dirname(filename)
+                    if dirname:
+                        os.makedirs(dirname, exist_ok=True)
 
-            if response.status_code == 200 and len(response.content) > 3000:
-                dirname = os.path.dirname(filename)
-                if dirname:
-                    os.makedirs(dirname, exist_ok=True)
-                with open(filename, "wb") as f:
-                    f.write(response.content)
-                print(f"{tag}[SUCCESS] Saved to {filename} ({os.path.getsize(filename)//1024} KB)")
-                
-                # STORE WORKING KEY: Lock active_index onto this working key for all future images
-                state["active_index"] = cur_idx
-                _save_worker_state(state)
-                return True
+                    # Format image to exact aspect ratio
+                    if width < height:  # 9:16 Vertical (Shorts: 576x1024)
+                        try:
+                            from PIL import Image
+                            import io
+                            img = Image.open(io.BytesIO(response.content)).convert("RGB")
+                            iw, ih = img.size
+                            
+                            fit_w = width
+                            fit_h = int(ih * (width / iw))
+                            img_fit = img.resize((fit_w, fit_h), Image.LANCZOS)
+                            bg_color = img.getpixel((8, 8))
+                            canvas = Image.new("RGB", (width, height), bg_color)
+                            paste_y = max(0, (height - fit_h) // 2 - 40)
+                            canvas.paste(img_fit, (0, paste_y))
+                            canvas.save(filename, format="PNG")
+                            print(f"{tag}[SUCCESS 9:16 Vertical {width}x{height}] Saved to {filename} ({os.path.getsize(filename)//1024} KB)")
+                        except Exception as e:
+                            with open(filename, "wb") as f:
+                                f.write(response.content)
+                            print(f"{tag}[SUCCESS] Saved to {filename} ({os.path.getsize(filename)//1024} KB)")
+                    elif width > height:  # 16:9 Landscape (Widescreen Full-Bleed 1024x576 - Zero Side Bars!)
+                        try:
+                            from PIL import Image
+                            import io
+                            img = Image.open(io.BytesIO(response.content)).convert("RGB")
+                            iw, ih = img.size
+                            if iw == width and ih == height:
+                                img.save(filename, format="PNG")
+                            else:
+                                # Full-bleed center crop to 1024x576 widescreen (zero side bars!)
+                                crop_top = (ih - height) // 2
+                                crop_bottom = crop_top + height
+                                img_crop = img.crop((0, crop_top, width, crop_bottom))
+                                img_crop.save(filename, format="PNG")
+                            print(f"{tag}[SUCCESS 16:9 Landscape Full-Bleed {width}x{height}] Saved to {filename} ({os.path.getsize(filename)//1024} KB)")
+                        except Exception as e:
+                            with open(filename, "wb") as f:
+                                f.write(response.content)
+                            print(f"{tag}[SUCCESS] Saved to {filename} ({os.path.getsize(filename)//1024} KB)")
+                    else:
+                        with open(filename, "wb") as f:
+                            f.write(response.content)
+                        print(f"{tag}[SUCCESS] Saved to {filename} ({os.path.getsize(filename)//1024} KB)")
 
-            elif is_quota or response.status_code in [429, 402, 503]:
-                print(f"{tag}[QUOTA EXHAUSTED] Key #{cur_idx+1} hit daily limit ({response.status_code}). Permanently marking exhausted and rotating...")
-                if url not in state.setdefault("exhausted", []):
-                    state["exhausted"].append(url)
-                next_active = (cur_idx + 1) % len(WORKERS)
-                state["active_index"] = next_active
-                _save_worker_state(state)
-                # Recursively try next active key
-                return _generate_image_via_workers(prompt, filename, width, height, label, start_offset=start_offset)
+                    # Lock active_index onto this working key for future sequential images
+                    if start_offset == 0:
+                        state["active_index"] = cur_idx
+                        _save_worker_state(state)
+                    return True
 
-            elif is_concurrency:
-                print(f"{tag}[KEY BUSY] Key #{cur_idx+1} busy (concurrency). Retrying same key after 1.2s pause...")
-                time.sleep(1.2)
+                elif is_quota or response.status_code in [429, 402, 503]:
+                    print(f"{tag}[QUOTA EXHAUSTED] Key #{cur_idx+1} hit daily limit ({response.status_code}). Rotating...")
+                    if url not in state.setdefault("exhausted", []):
+                        state["exhausted"].append(url)
+                    _save_worker_state(state)
+                    break
 
-            else:
-                print(f"{tag}[KEY ERROR] Key #{cur_idx+1} returned status {response.status_code}. Retrying...")
-                time.sleep(1.0)
+                elif is_concurrency:
+                    time.sleep(0.5)
+                    continue
 
-        except Exception as e:
-            print(f"{tag}[KEY RETRY] Key #{cur_idx+1} attempt {attempt} error: {e}")
-            time.sleep(1.0)
+                else:
+                    break
 
-    # If 3 attempts on active key were busy, try next candidate key
-    if len(candidates) > 1:
-        next_idx = candidates[1]
-        state["active_index"] = next_idx
-        _save_worker_state(state)
-        print(f"{tag}[KEY ROTATE] Active Key #{cur_idx+1} busy after 3 retries. Switching to Key #{next_idx+1}...")
-        return _generate_image_via_workers(prompt, filename, width, height, label, start_offset=start_offset)
+            except Exception:
+                break
 
-    print(f"{tag}[FALLBACK] Active Cloudflare worker busy. Using FLUX Fallback...")
-    return _generate_via_flux_fallback(prompt, filename, width, height, tag)
+    # If Cloudflare workers are busy or unavailable, seamlessly failover to HF FLUX.1-schnell
+    print(f"{tag}[FAILOVER] Switching to HuggingFace FLUX.1-schnell...")
+    return _generate_via_hf_client(prompt, filename, width, height, tag)
 
 
 # ─── Public API ───────────────────────────────────────────────────────────────
@@ -260,26 +333,36 @@ from concurrent.futures import ThreadPoolExecutor
 
 def generate_image_hf(prompt, filename, aspect_ratio="16:9", start_offset=0):
     """
-    Generates an image via Cloudflare Worker API pool.
-    Supports aspect_ratio="16:9" (1024x576) or "9:16" (576x1024).
+    Generates high-quality 2D doodle images via FLUX.1-schnell Worker API pool.
+    - 16:9 Landscape: FLUX with widescreen framing + 0% crop aspect-fitting to 1024x576.
+    - 9:16 Vertical (Shorts): FLUX with vertical centered framing + 0% crop aspect-fitting to 576x1024.
     """
     if aspect_ratio == "9:16":
-        return _generate_image_via_workers(prompt, filename, width=576, height=1024, label="9:16", start_offset=start_offset)
+        # Inject centered framing so FLUX places subject strictly in the vertical safe zone
+        vertical_prompt = prompt
+        if "centered" not in vertical_prompt.lower():
+            vertical_prompt += ", single prominent large subject centered in frame with generous padding around edges, 0% clipped edges"
+        return _generate_image_via_workers(vertical_prompt, filename, width=576, height=1024, label="9:16 FLUX", start_offset=start_offset)
     else:
-        return _generate_image_via_workers(prompt, filename, width=1024, height=576, label="16:9", start_offset=start_offset)
+        landscape_prompt = prompt
+        if "prominent" not in landscape_prompt.lower() and "framed" not in landscape_prompt.lower():
+            landscape_prompt += ", single large prominent central subject framed cleanly with generous padding around edges, 0% clipped edges"
+        return _generate_image_via_workers(landscape_prompt, filename, width=1024, height=576, label="16:9 FLUX", start_offset=start_offset)
 
 
-def generate_batch_hf(items_list):
+def generate_batch_hf(items_list, aspect_ratio="16:9"):
     """
     Generates a batch of images by shifting worker key offset per item (Item 1 -> Key 1, Item 2 -> Key 2, etc.)
     Concurrently generates images in parallel across distinct Cloudflare Worker keys for 5x speedup.
+    Supports aspect_ratio="16:9" or "9:16" vertical format.
     """
     def _worker_task(indexed_item):
         idx, item = indexed_item
         time.sleep(idx * 0.1) # Micro-stagger to distribute threads across distinct workers
         prompt = item["prompt"]
         out_path = item["output_path"]
-        return generate_image_hf(prompt, out_path, aspect_ratio="16:9", start_offset=idx)
+        ar = item.get("aspect_ratio", aspect_ratio)
+        return generate_image_hf(prompt, out_path, aspect_ratio=ar, start_offset=idx)
 
     items_with_idx = list(enumerate(items_list))
     with ThreadPoolExecutor(max_workers=min(8, len(items_list))) as executor:

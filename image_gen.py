@@ -1,69 +1,54 @@
 import os
-import requests
-import fal_client
+import sys
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
 
-# fal_client automatically reads FAL_KEY from os.environ after load_dotenv() is called.
-
-def generate_image(prompt, filename, style="vector_illustration", image_size="landscape_16_9"):
+def generate_image(prompt, filename, style="vector_illustration", image_size="landscape_16_9", aspect_ratio="16:9"):
     """
-    Generates an image using fal.ai Recraft V3 model and saves it to disk.
+    Generates an image using Google Flow Imagen (gflow) with fallback to Cloudflare Workers.
     """
-    if not os.getenv("FAL_KEY"):
-        raise ValueError("FAL_KEY environment variable is not set. Please add it to your .env file.")
-
-    print(f"Sending prompt to fal.ai (Recraft v3, Style: {style}): {prompt}")
+    os.makedirs(os.path.dirname(os.path.abspath(filename)), exist_ok=True)
     
+    # Map image_size / aspect_ratio
+    if "portrait" in str(image_size).lower() or aspect_ratio == "9:16":
+        aspect = "9:16"
+    elif "square" in str(image_size).lower() or aspect_ratio == "1:1":
+        aspect = "1:1"
+    else:
+        aspect = "16:9"
+
+    print(f"[image_gen] Generating image via gflow (Aspect: {aspect}): {prompt[:80]}...")
     try:
-        # Submit the request to fal.ai
-        handler = fal_client.subscribe(
-            "fal-ai/recraft/v3/text-to-image",
-            arguments={
-                "prompt": prompt,
-                "style": style,
-                "image_size": image_size
-            },
-            with_logs=True
-        )
-        
-        # Extract the image URL
-        images = handler.get("images", [])
-        if not images:
-            print("No images returned from fal.ai.")
-            return False
-            
-        image_url = images[0].get("url")
-        print(f"Image generated successfully. Downloading from: {image_url}")
-        
-        # Download the file
-        response = requests.get(image_url, timeout=30)
-        if response.status_code == 200:
-            os.makedirs(os.path.dirname(filename), exist_ok=True)
-            with open(filename, "wb") as f:
-                f.write(response.content)
-            print(f"Saved image to {filename} (Size: {len(response.content)} bytes)")
+        from gflow_assistant import generate_imagen_image
+        success = generate_imagen_image(prompt, filename, aspect_ratio=aspect)
+        if success and os.path.exists(filename) and os.path.getsize(filename) > 1000:
+            print(f"[image_gen] ✅ Successfully generated via gflow -> {filename}")
             return True
-        else:
-            print(f"Failed to download image. Status: {response.status_code}")
-            return False
-            
     except Exception as e:
-        print(f"Error during image generation: {e}")
-        return False
+        print(f"[image_gen] ⚠️ gflow error: {e}. Falling back to Cloudflare...")
+
+    # Fallback to Cloudflare Workers
+    try:
+        from hf_image_gen import generate_image_hf
+        print(f"[image_gen] 🔄 Generating via Cloudflare Workers fallback...")
+        generate_image_hf(prompt, filename, aspect_ratio=aspect)
+        if os.path.exists(filename) and os.path.getsize(filename) > 1000:
+            print(f"[image_gen] ✅ Successfully generated via Cloudflare fallback -> {filename}")
+            return True
+    except Exception as e:
+        print(f"[image_gen] ❌ Cloudflare fallback error: {e}")
+
+    return False
 
 if __name__ == "__main__":
-    # Test script if run directly
-    import sys
     if len(sys.argv) < 3:
-        print("Usage: python image_gen.py <prompt> <output_path>")
+        print("Usage: python image_gen.py <prompt> <output_path> [aspect_ratio]")
         sys.exit(1)
         
     prompt_arg = sys.argv[1]
     output_arg = sys.argv[2]
-    
-    # Custom test suffix if needed
-    test_prompt = prompt_arg + ", clean simple hand-drawn cartoon doodle, solid color background, webcomic style"
-    generate_image(test_prompt, output_arg)
+    aspect_arg = sys.argv[3] if len(sys.argv) > 3 else "16:9"
+    generate_image(prompt_arg, output_arg, aspect_ratio=aspect_arg)
+
