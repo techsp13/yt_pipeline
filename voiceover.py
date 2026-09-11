@@ -135,6 +135,8 @@ def clean_tts_transcript(text):
 
 
 
+_EXHAUSTED_KEYS = set()
+
 def generate_speech_cartesia(text, output_path, voice_id=DEFAULT_VOICE_ID, api_key=None, retry_clone_on_missing=True):
     """
     Generates high-speed, high-quality audio using Cartesia AI API with automatic key rotation.
@@ -143,10 +145,11 @@ def generate_speech_cartesia(text, output_path, voice_id=DEFAULT_VOICE_ID, api_k
     if not text or len(text) < 2:
         return False  # Empty narration → no audio; do not speak placeholder text
 
-    keys_to_try = [api_key] if api_key else get_all_cartesia_keys()
+    all_keys = [api_key] if api_key else get_all_cartesia_keys()
+    keys_to_try = [k for k in all_keys if k not in _EXHAUSTED_KEYS]
     if not keys_to_try:
-        print("[Cartesia TTS] ERROR: No CARTESIA_API_KEY configured!")
-        notify_key_expired("No API key configured")
+        print("[Cartesia TTS] ERROR: No working CARTESIA_API_KEY configured!")
+        notify_key_expired("All Cartesia keys in rotation pool exhausted")
         return False
 
     last_error = ""
@@ -187,7 +190,7 @@ def generate_speech_cartesia(text, output_path, voice_id=DEFAULT_VOICE_ID, api_k
             payload["output_format"]["encoding"] = "pcm_s16le"
 
         try:
-            res = requests.post(url, headers=headers, json=payload, timeout=20)
+            res = requests.post(url, headers=headers, json=payload, timeout=180)
             if res.status_code == 200:
                 os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
                 with open(output_path, "wb") as f:
@@ -203,19 +206,26 @@ def generate_speech_cartesia(text, output_path, voice_id=DEFAULT_VOICE_ID, api_k
                 if new_vid:
                     return generate_speech_cartesia(text, output_path, voice_id=new_vid, api_key=key, retry_clone_on_missing=False)
 
+            # Handle temporary concurrency rate limit (429) -> Backoff & retry, do NOT exhaust key!
+            if res.status_code == 429:
+                import time
+                time.sleep(1.5)
+                continue
+
             # Check if key is expired, unauthorized, or quota exceeded -> Rotate key!
-            if res.status_code in [401, 402, 403, 429]:
+            if res.status_code in [401, 402, 403]:
+                _EXHAUSTED_KEYS.add(key)
                 last_error = f"Key #{idx} ({key[:10]}...) HTTP {res.status_code}: {res.text[:150]}"
-                print(f"⚠️ [Cartesia Key #{idx} Expired/Quota Limit]: {last_error}")
+                print(f"[Cartesia Key #{idx} Quota Limit]: {last_error}")
                 if idx < len(keys_to_try):
-                    print(f"🔄 Rotating to next Cartesia key ({idx+1}/{len(keys_to_try)})...")
+                    print(f"[Cartesia] Rotating to next key ({idx+1}/{len(keys_to_try)})...")
                 continue
 
             # Fallback to sonic-2 model if sonic-3.5 returned temporary error
-            print(f"[Cartesia TTS] Warning: Key #{idx} sonic-3.5 returned {res.status_code}. Retrying sonic-2...")
+            print(f"[Cartesia TTS] Warning: Key #{idx} returned {res.status_code}. Retrying...")
             headers["Cartesia-Version"] = "2024-06-10"
             payload["model_id"] = "sonic-2"
-            res2 = requests.post(url, headers=headers, json=payload, timeout=20)
+            res2 = requests.post(url, headers=headers, json=payload, timeout=180)
             if res2.status_code == 200:
                 os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
                 with open(output_path, "wb") as f:
@@ -223,11 +233,16 @@ def generate_speech_cartesia(text, output_path, voice_id=DEFAULT_VOICE_ID, api_k
                 size_kb = os.path.getsize(output_path) / 1024
                 print(f"[Cartesia TTS] Saved using Key #{idx}: {output_path} ({size_kb:.1f} KB)")
                 return True
-            elif res2.status_code in [401, 402, 403, 429]:
+            elif res2.status_code == 429:
+                import time
+                time.sleep(1.5)
+                continue
+            elif res2.status_code in [401, 402, 403]:
+                _EXHAUSTED_KEYS.add(key)
                 last_error = f"Key #{idx} HTTP {res2.status_code}: {res2.text[:150]}"
-                print(f"⚠️ [Cartesia Key #{idx} Expired/Quota Limit]: {last_error}")
+                print(f"[Cartesia Key #{idx} Quota Limit]: {last_error}")
                 if idx < len(keys_to_try):
-                    print(f"🔄 Rotating to next Cartesia key ({idx+1}/{len(keys_to_try)})...")
+                    print(f"[Cartesia] Rotating to next key ({idx+1}/{len(keys_to_try)})...")
                 continue
 
         except Exception as e:
@@ -236,7 +251,7 @@ def generate_speech_cartesia(text, output_path, voice_id=DEFAULT_VOICE_ID, api_k
             continue
 
     # If all keys failed, notify Telegram
-    print("🚨 [Cartesia TTS] ALL keys in rotation pool expired or failed!")
+    print("[Cartesia TTS] ALL keys in rotation pool expired or failed!")
     notify_key_expired(last_error or "All Cartesia keys in rotation pool exhausted")
     return False
 
@@ -244,8 +259,8 @@ def generate_speech_cartesia(text, output_path, voice_id=DEFAULT_VOICE_ID, api_k
 
 def generate_speech(text, output_path, voice_id=DEFAULT_VOICE_ID, reference_wav=DEFAULT_REFERENCE, **kwargs):
     """
-    Main voice generation entry point for the YouTube automation pipeline.
-    Primary & Exclusive: Cartesia AI (Voice ID: d5495ba1-91c4-4581-a0d1-9ed3178e9b8c)
+    Main voice generation entry point.
+    STRICT USER RULE: Cartesia AI ONLY. If credits expire, prompt user for new key.
     """
     print(f"[VoiceGen] Generating: \"{text[:50]}...\"" if len(text) > 50 else f"[VoiceGen] Generating: \"{text}\"")
     return generate_speech_cartesia(text, output_path, voice_id=voice_id)

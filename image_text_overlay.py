@@ -57,91 +57,25 @@ def extract_labels_from_prompt(prompt: str) -> list[str]:
 
 def overlay_text_labels(image_path: str, labels: list[str], *, position: str = "top") -> bool:
     """
-    Draws doodle-style text labels onto an image in-place.
+    STRICT USER DIRECTIVE:
+    NEVER add white left top corner text.
+    Any text must be proper doodle-style text generated natively within the scene (or on signs,
+    boards, charts, or thought bubbles as bold black marker lettering).
 
-    Args:
-        image_path: Path to the PNG/JPG file to annotate.
-        labels:     List of strings to draw (e.g. ['1999', '$5']).
-        position:   'top' (default) or 'bottom' — where to place labels.
-
-    Returns True on success, False if nothing was drawn.
+    This function is intentionally a NO-OP to prevent duplicate white top-left text.
     """
-    if not labels or not os.path.exists(image_path):
-        return False
-
-    try:
-        img = Image.open(image_path).convert("RGBA")
-        draw = ImageDraw.Draw(img)
-        w, h = img.size
-
-        # Determine font size relative to image width (≈6% of width, min 24 px)
-        font_size = max(24, int(w * 0.06))
-        font = _best_font(font_size)
-
-        # Measure total text width to arrange labels horizontally
-        padding = int(w * 0.03)
-        x = padding
-        y = padding if position == "top" else (h - font_size - padding * 3)
-
-        for label in labels:
-            # Sample background colour at target position for contrast
-            try:
-                sample_x = min(x + font_size // 2, w - 1)
-                sample_y = min(y + font_size // 2, h - 1)
-                bg_pix = img.getpixel((sample_x, sample_y))
-                text_color = _contrast_color(bg_pix)
-            except Exception:
-                text_color = (0, 0, 0)
-
-            # Draw thick black outline (stroke effect)
-            outline = 3
-            for dx in range(-outline, outline + 1):
-                for dy in range(-outline, outline + 1):
-                    if dx != 0 or dy != 0:
-                        draw.text((x + dx, y + dy), label, font=font, fill=(0, 0, 0, 255))
-
-            # Draw white fill on top
-            draw.text((x, y), label, font=font, fill=(255, 255, 255, 255))
-
-            # Advance x for next label
-            bbox = draw.textbbox((0, 0), label, font=font)
-            label_w = bbox[2] - bbox[0]
-            x += label_w + padding * 2
-
-            # Wrap to next line if overflowing
-            if x > w - padding:
-                x = padding
-                y += font_size + padding
-
-        # Save back as RGB PNG
-        img = img.convert("RGB")
-        img.save(image_path, "PNG")
-        return True
-
-    except Exception as e:
-        print(f"[TextOverlay] Failed to overlay text on {image_path}: {e}")
-        return False
+    return False
 
 
 def apply_prompt_labels(image_path: str, prompt: str) -> bool:
     """
-    Convenience wrapper: extracts labels from a prompt string and overlays them.
-    Returns True if labels were applied, False if no labels found or error.
+    STRICT USER DIRECTIVE:
+    NEVER add white left top corner text.
+    Permanently disabled to prevent duplicate white top-left text.
     """
-    labels = extract_labels_from_prompt(prompt)
-    if not labels:
-        return False
-    print(f"[TextOverlay] Applying labels {labels} onto {os.path.basename(image_path)}")
-    return overlay_text_labels(image_path, labels, position="top")
+    return False
 
 
 if __name__ == "__main__":
-    # Quick smoke test
-    import sys
-    if len(sys.argv) >= 3:
-        img_path = sys.argv[1]
-        test_labels = sys.argv[2:]
-        ok = overlay_text_labels(img_path, test_labels)
-        print("Applied:", ok)
-    else:
-        print("Usage: python image_text_overlay.py <image.png> <label1> [label2 ...]")
+    print("[image_text_overlay] Top-left white text overlay permanently disabled per project styling rules.")
+

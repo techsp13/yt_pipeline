@@ -347,9 +347,11 @@ def generate_thumbnails(topic, selected_title):
     2. Emotion: [Curiosity, fear, wonder, surprise, etc.]
     3. Background: [Description of scenery/backdrop]
     4. Camera Angle & Lighting: [e.g., Low angle, dramatic split lighting]
-    5. Text on Thumbnail (max 3 words): [Short click-trigger text in Patrick Hand font]
+    5. Text on Thumbnail (max 3 words): [Short click-trigger text, UPPERCASE plain text only, absolutely NO markdown bold **, NO quotes, NO special symbols]
     6. Why it increases CTR: [Visual explanation]
     7. FLUX Image Generator Prompt: [Detailed 16:9 prompt in the minimalist doodle cartoon style we locked: flat 2D vector art, hand-drawn stick figure style with round white head, dot eyes, single black marker lines for limbs, no clothes, no body shape, and matching detailed environment background]
+    
+    CRITICAL: For 'Text on Thumbnail', provide ONLY plain text words. NEVER include asterisks (** or *), quotes, or special characters.
     """
     print(f"Generating 10 thumbnail concepts for: '{selected_title}'...")
     response = _generate_with_retry(prompt)
@@ -545,12 +547,23 @@ def generate_scene_breakdown_chunk(script_chunk, start_scene_num, style_instruct
     
     Start numbering the scenes from V{start_scene_num}.
     
+    CRITICAL ZERO-DUPLICATION & PARTITIONING RULES:
+    1. STRICT ZERO REPETITION: Every spoken word in the script segment must be spoken in EXACTLY ONE scene. NEVER repeat words, clauses, phrases, or full sentences across multiple scenes.
+    2. NON-OVERLAPPING PARTITIONING: When splitting a long sentence across multiple scenes, split it cleanly into consecutive, non-overlapping parts.
+       - CORRECT:
+         V10: "Imagine a Formula 1 race car, constantly running at its absolute limit,"
+         V11: "redlining the engine through every turn."
+       - WRONG (BANNED):
+         V10: "Imagine a Formula 1 race car, constantly running at its absolute limit, redlining the engine through every turn."
+         V11: "redlining the engine through every turn." (DUPLICATE!)
+    3. NO EMPTY NARRATION SCENES: Every visual scene MUST have its own non-empty spoken narration segment. Do NOT create visual scenes with empty narration ("") in the middle of spoken thoughts.
+    
     For each scene, output EXACTLY in this format:
     
     **V[SceneNumber]**
     **Image Prompt:** [Describe the scene illustration. The description must include:
     {style_instructions.strip()}]
-    **Narration:** "[Exactly the sentence or part of sentence spoken during this scene]"
+    **Narration:** "[Exactly the non-overlapping sentence or part of sentence spoken during this scene]"
     
     Script segment to convert:
     {script_chunk}
@@ -565,13 +578,32 @@ def generate_scene_breakdown(script):
     Generates in chunks to avoid output token truncation on long scripts.
     """
     profile = get_profile()
-    style_instructions = """
-    PROMPT FORMAT — VIBRANT 2D CARTOON WEBCOMIC ENVIRONMENT STYLE:
-    1. Scene Setting & Environment: Describe a rich, atmospheric 2D background environment and setting matching the narration (e.g. ancient stone temple, glowing cave, high-tech science laboratory, bustling bank vault, starry galaxy, prehistoric savannah). Leave open presentation space in the foreground/center.
-    2. NO CHARACTERS / NO PRESENTER: Do NOT describe stick figures, people, faces, or main presenters. The animated presenter is composited on top separately by our Python animation engine.
-    3. Art Style: Vibrant 2D cartoon webcomic illustration with thick bold clean black marker outlines, flat solid vibrant color fills, and rich dramatic atmospheric lighting (clean 2D vector / storybook style, NO 3D rendering, NO claymation, NO photographic realism).
-    4. Composition: 16:9 widescreen cinematic background composition with depth.
-    5. Clean Image: Strictly NO text, words, letters, labels, or watermarks in the image.
+    if profile == "money":
+        char_dna = "RECURRING MAIN CHARACTER: The exact same recurring 2D stickman mascot: a cute minimalist 2D stick figure with a solid smooth vibrant-yellow round head (#F9D342), thick black marker outline, simple expressive black dot eyes, wearing story-appropriate attire (e.g. sharp tailored business suit for modern finance, merchant robes for historic trade, casual clothes for everyday savings), black stick arms and legs."
+    elif profile == "science":
+        char_dna = "RECURRING MAIN CHARACTER: The exact same recurring 2D stickman mascot: a cute minimalist 2D stick figure with a solid smooth pure white round head (#FFFFFF), thick black marker outline, simple expressive black dot eyes, wearing story-appropriate scientific gear (e.g. lab coat and goggles for laboratory/biology, astronaut spacesuit for cosmos/space, field gear for nature/paleontology), black stick arms and legs."
+    else:
+        char_dna = "RECURRING MAIN CHARACTER: The exact same recurring 2D stickman mascot: a cute minimalist 2D stick figure with a solid smooth tan-brown round head (#C89B78), thick black marker outline, simple expressive black dot eyes, small neat black mustache and tiny chin goatee, wearing dynamic era-appropriate clothing matching the exact historical time period of the story (e.g., rough animal fur pelt/wrap for Prehistoric/Stone Age/Caveman, linen kilt for Ancient Egypt, classical toga for Greco-Roman antiquity, medieval peasant/knight tunic for Middle Ages, explorer gear for Age of Discovery, vintage attire for Industrial/Modern history), black stick arms and legs."
+
+    style_instructions = f"""
+    PROMPT FORMAT — MINIMALIST 2D DOODLE WEBCOMIC ART STYLE (ZENN & MACK AESTHETIC):
+    1. Minimalist Visual Focus (1-2 Hero Elements Max): Clean, uncluttered composition with generous negative space. Exactly 1 or 2 clear focal story objects/subjects per scene (e.g., single campfire with stickmen, single flower plant in a meadow, single open bank vault, single arm with microscopic germs). Zero visual clutter, zero crowded floating debris, zero messy background noise.
+    2. Character Consistency & Dynamic Era-Appropriate Clothing: 
+       - {char_dna}
+       - DYNAMIC CLOTHING MANDATE: The character's outfit and clothing MUST dynamically match the exact era, setting, or theme of the story topic (e.g. if the story is about Old Age / Stone Age / Cavemen, the character MUST wear a prehistoric caveman animal fur pelt/wrap, NOT a Roman toga; if Ancient Egypt, wear an Egyptian linen kilt; if Medieval, wear medieval tunic; if Greek/Roman, wear a toga). Never put Roman/Greek togas on Stone Age or non-classical stories!
+    3. Authentic Object-Specific Natural Colors (Strictly NO Monochrome Washes):
+       - Every individual object in the scene MUST have its own authentic, distinct color:
+         * Trees & Foliage: Lush vibrant GREEN leaves/canopy on solid dark brown wooden trunks. Strictly NEVER make trees or leaves yellow/beige matching the sky.
+         * Sky: Clean natural light-blue sky (#87CEEB) with white cartoon clouds.
+         * Grass & Ground: Fresh green grass blades on warm natural earth/soil ground.
+         * Animals: Multi-colored cartoon bodies (e.g. Golden lion body with dark brown fluffy mane; orange tiger with black stripes; solid dark brown bear fur).
+         * Character: Tan skin (#C89B78), dark hair/beard, dynamic clothing (brown fur wrap, blue tunic, khaki safari shirt).
+       - Strictly BAN single-color tinting or all-yellow washes where background, trees, and sky blur into one muddy tone. Each element must pop with its own proper natural color.
+    4. Art Style & Solid Full-Color Objects: 2D hand-drawn webcomic doodle cartoon art, bold clean thick black ink marker outlines, solid flat cel-shaded colors, playful cartoon motion marks. All characters, animals, props, weapons, and products MUST be FULLY COLORED solid opaque 2D cartoon objects. Strictly NO line-only wireframe drawings, NO faint/transparent mirage outlines, NO unfinished sketch lines. Strictly NO photorealism, NO 3D rendering, NO claymation, NO gritty complex shading.
+    6. TEXT & LETTERING MANDATE (PROPER DOODLE STYLE ONLY):
+       - Strictly NEVER put floating white text or any text in the top-left or other corners of the image.
+       - If a scene explicitly requires text (e.g. on a wooden hanging sign, a menu board, a pie chart/bar chart, a banner, or a label on a bucket/box), the text MUST be authentic hand-drawn bold black marker comic lettering cleanly integrated directly into the object or illustration (matching Zenn & Mack / doodle comic aesthetics).
+       - Zero duplicate text, zero floating digital UI text.
     """
 
     # Split script into paragraphs to group into chunks of ~200 words
@@ -657,9 +689,13 @@ def generate_seo_metadata(topic, title):
     SEO Description: [Compelling description optimized for YouTube search with key search intent terms, approximately 150-200 words]
     Keywords: [Comma-separated list of 15 high-volume search tags]
     Hashtags: [List of 3-5 relevant hashtags]
-    Thumbnail Title: [Max 3 words click-trigger text for the thumbnail]
+    Thumbnail Title: [Max 3 words click-trigger text for the thumbnail, UPPERCASE plain text only, absolutely NO markdown bold **, NO quotes, NO special symbols]
     Thumbnail Concept: [Detailed visual thumbnail concept description]
     Thumbnail Prompt: [Detailed 16:9 prompt in the {style_desc}]
+    
+    CRITICAL FORMATTING INSTRUCTIONS:
+    - Output raw plain text ONLY. DO NOT wrap field names or field values in markdown bold asterisks (NEVER use **Field:** or **text**).
+    - 'Thumbnail Title' must be 1-3 short punchy words with letters, spaces, and optional '?' or '!'. Absolutely NO asterisks (**), NO hashes (#), NO symbols.
     """
     print(f"Generating SEO metadata for title: '{title}'...")
     response = _generate_with_retry(prompt)

@@ -133,9 +133,11 @@ def main():
                     image_path = ap
                     break
 
-        if not os.path.exists(image_path):
-            print(f"Scene V{num_str}: Image missing! ({image_path})")
-            return None
+        # Skip if clip already exists and is non-empty
+        if os.path.exists(clip_path) and os.path.getsize(clip_path) > 5000:
+            v_dur = get_video_stream_duration(clip_path)
+            print(f"Scene V{num_str}: Already rendered ({v_dur:.3f}s). Skipping...")
+            return (s_num, clip_path, v_dur)
 
         # Build scene video with embedded audio (silent=False)
         try:

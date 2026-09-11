@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 import threading
 import concurrent.futures
 import random
+import thumbnail_generator
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
@@ -132,7 +133,7 @@ if __name__ == "__main__":
 import telegram_bot
 import creative_assistant
 from voiceover import generate_speech
-from hf_image_gen import generate_image_hf
+from gflow_assistant import generate_imagen_image
 from image_validator import validate_image
 from PIL import Image, ImageDraw
 
@@ -913,133 +914,22 @@ def _build_scene_video_static(image_path, audio_path, text, output_path, duratio
 def _build_scene_video_animated(image_path, audio_path, text, output_path, duration, fps, ffmpeg,
                                 scene_index=0, last_gesture=None, last_cx=None, beard=False,
                                 silent=False):
-    """Animated stickman compositor — full presenter walk+gesture per scene.
-    Uses build_presenter_sequence for narration-driven walk+gesture sequences.
-    Optimized with OpenCV and Numpy for 8x+ rendering speedup.
-    If silent=True: produces a VIDEO-ONLY MKV (no audio stream). Master audio is muxed once in Step 10.
-    """
-    from stickman_engine import build_presenter_sequence
-    import numpy as np
-    import cv2
-
-    BG_W, BG_H = 1920, 1080   # output video dimensions
-    STICK_CANVAS_W, STICK_CANVAS_H = 1080, 1920   # stickman engine native canvas
-    FLOOR_Y = 810              # stickman floor in BG coords
-    STICK_H = 750              # rendered stickman height on BG
-    STICK_W = int(STICK_CANVAS_W / STICK_CANVAS_H * STICK_H)
-    PAD = 30
-
-    N = int(round(duration * fps))
-    V_dur = N / float(fps)
-
-    # 1. Load AI background and convert to numpy RGB once (FFmpeg input format)
-    bg_img = Image.open(image_path).convert("RGBA").resize((BG_W, BG_H), Image.LANCZOS)
-    bg_np_rgb = np.array(bg_img.convert("RGB"))
-
-    # 2. Build presenter animation (walk + gestures, narration-driven)
-    raw_frames, used_gesture, final_cx = build_presenter_sequence(
-        narration=text,
-        total_frames=N,
-        scene_index=scene_index,
-        cy=1380.0,
-        s=2.2,
-        bg_color=(0, 0, 0, 0),
-        last_gesture=last_gesture,
-        last_cx=last_cx,
-        beard=beard,
+    """PyToon Multi-Channel Animated Presenter Engine with 100% Wav2Vec2 Neural Lip Sync."""
+    import pytoon_renderer
+    cfg = get_channel_config()
+    channel_name = cfg.get("profile", cfg.get("name", "history")).lower()
+    pytoon_renderer.render_pytoon_scene(
+        image_path=image_path,
+        audio_path=audio_path,
+        text=text,
+        output_path=output_path,
+        duration=duration,
+        fps=fps,
+        ffmpeg=ffmpeg,
+        channel=channel_name,
+        silent=silent
     )
-
-    # 3. Pipe frames into FFmpeg
-    vf_filter = f"scale=1280:720,fps=fps={fps}"
-
-    if silent:
-        # VIDEO-ONLY output: no audio input, no audio stream.
-        # Master audio will be muxed ONCE in Step 10 at the end.
-        cmd = [
-            ffmpeg, "-y",
-            "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{BG_W}x{BG_H}", "-r", str(fps),
-            "-i", "pipe:0",
-            "-vf", vf_filter,
-            "-c:v", "libx264", "-bf", "0", "-preset", "fast", "-crf", "18",
-            "-pix_fmt", "yuv420p",
-            "-an",  # No audio stream
-            output_path
-        ]
-    else:
-        # Legacy mode with embedded audio (kept for compatibility)
-        af_filter = f"atrim=end={V_dur:.6f},apad=whole_dur={V_dur:.6f}"
-        cmd = [
-            ffmpeg, "-y",
-            "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{BG_W}x{BG_H}", "-r", str(fps),
-            "-i", "pipe:0",
-            "-i", audio_path,
-            "-vf", vf_filter, "-af", af_filter,
-            "-c:v", "libx264", "-bf", "0", "-preset", "fast", "-crf", "18",
-            "-c:a", "pcm_s16le", "-pix_fmt", "yuv420p",
-            "-t", f"{V_dur:.6f}", output_path
-        ]
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    paste_y = BG_H - STICK_H + 20   # feet near bottom of frame
-    paste_x = int(BG_W * 0.25) - STICK_W // 2   # left third of screen
-
-    # Kernel for dilation (white outline thickness=8)
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (17, 17))
-
-    for fi, stick_raw in enumerate(raw_frames):
-        # Convert PIL to numpy array
-        stick_np = np.array(stick_raw)
-
-        # 1. Resize stickman using OpenCV (extremely fast Cubic interpolation)
-        stick_scaled_np = cv2.resize(stick_np, (STICK_W, STICK_H), interpolation=cv2.INTER_CUBIC)
-
-        # 2. Outline stickman using cv2.dilate on alpha channel
-        h, w, c = stick_scaled_np.shape
-        padded_np = np.zeros((h + PAD*2, w + PAD*2, 4), dtype=np.uint8)
-        padded_np[PAD:PAD+h, PAD:PAD+w] = stick_scaled_np
-
-        alpha = padded_np[:, :, 3]
-        dilated_alpha = cv2.dilate(alpha, kernel)
-
-        # Create white stroke
-        stroke_np = np.zeros_like(padded_np)
-        stroke_np[:, :, :3] = 255
-        stroke_np[:, :, 3] = dilated_alpha
-
-        # Composite stickman over stroke (where stickman alpha > 0)
-        mask = (alpha > 0)
-        stroke_np[mask] = padded_np[mask]
-
-        # 3. Composite on background
-        comp_np = bg_np_rgb.copy()
-
-        # Paste stickman onto bg using alpha blending
-        dy_start = max(0, paste_y - PAD)
-        dx_start = paste_x - PAD
-        sh, sw, _ = stroke_np.shape
-
-        dy_end = min(BG_H, dy_start + sh)
-        dx_end = min(BG_W, dx_start + sw)
-
-        sh_clip = dy_end - dy_start
-        sw_clip = dx_end - dx_start
-
-        if sh_clip > 0 and sw_clip > 0:
-            overlay = stroke_np[:sh_clip, :sw_clip]
-            overlay_rgb = overlay[:, :, :3]
-            overlay_alpha = overlay[:, :, 3:4].astype(np.uint16)
-
-            target = comp_np[dy_start:dy_end, dx_start:dx_end].astype(np.uint16)
-            comp_np[dy_start:dy_end, dx_start:dx_end] = (
-                ((overlay_rgb.astype(np.uint16) * overlay_alpha) + target * (255 - overlay_alpha)) // 255
-            ).astype(np.uint8)
-
-        # Write directly to FFmpeg pipe
-        proc.stdin.write(comp_np.tobytes())
-
-    proc.stdin.close()
-    proc.wait()
-    return used_gesture, final_cx
+    return "explain", 1150
 
 
 
@@ -1099,20 +989,27 @@ def generate_youtube_timestamps(proj_dir):
     if not timestamps:
         print("[Timestamps] No section headers found in breakdown. Generating via Gemini fallback...")
         try:
+            timeline_path = os.path.join(proj_dir, "14_Checkpoints", "Scene_Timeline.json")
+            tl_map = {}
+            if os.path.exists(timeline_path):
+                with open(timeline_path, "r", encoding="utf-8") as f:
+                    tl_map = {s["number"]: s.get("start", 0.0) for s in json.load(f).get("scenes", [])}
             scenes = parse_scenes_from_file()
             scene_data = []
             for scene in scenes:
                 num = scene["number"]
                 num_str = f"{num:02d}"
-                metadata_path = os.path.join(proj_dir, "14_Checkpoints", f"Scene_{num_str}_Metadata.json")
-                start_sec = 0.0
-                if os.path.exists(metadata_path):
-                    try:
-                        with open(metadata_path, "r", encoding="utf-8") as mf:
-                            meta = json.load(mf)
-                            start_sec = meta.get("start_timestamp", 0.0)
-                    except Exception:
-                        pass
+                start_sec = tl_map.get(num)
+                if start_sec is None:
+                    metadata_path = os.path.join(proj_dir, "14_Checkpoints", f"Scene_{num_str}_Metadata.json")
+                    start_sec = 0.0
+                    if os.path.exists(metadata_path):
+                        try:
+                            with open(metadata_path, "r", encoding="utf-8") as mf:
+                                meta = json.load(mf)
+                                start_sec = meta.get("start_timestamp", 0.0)
+                        except Exception:
+                            pass
                 scene_data.append({
                     "number": num,
                     "start_sec": start_sec,
@@ -1129,151 +1026,26 @@ def generate_youtube_timestamps(proj_dir):
 
 def build_vertical_scene_video(image_path, audio_path, output_path, narration="", scene_index=0,
                                last_gesture=None, last_cx=None, bg_image_paths=None, bg_switch_sec=2.0):
-    """Builds a single vertical (9:16) scene clip with animated stickman presenter and dynamic 2-second background switching."""
-    from stickman_engine import build_presenter_sequence
-    import numpy as np
-    import cv2
-
+    """Builds a single vertical (9:16) scene clip with channel-colored PyToon character."""
+    import pytoon_renderer
     duration = get_audio_duration(audio_path)
     ffmpeg   = get_ffmpeg_path()
     fps      = config.video.fps
 
-    BG_W, BG_H = 720, 1280   # vertical 9:16
-    STICK_H    = 920
-    STICK_W    = int(1080 / 1920 * STICK_H)
-    PAD        = 25
+    cfg = get_channel_config()
+    channel_name = cfg.get("profile", cfg.get("name", "history")).lower()
 
-    N     = int(round(duration * fps))
-    V_dur = N / float(fps)
-
-    def prepare_bg_np(p):
-        try:
-            img = Image.open(p).convert("RGB")
-            iw, ih = img.size
-            if abs(iw / ih - BG_W / BG_H) < 0.05:
-                # Native 9:16 image
-                img_resized = img.resize((BG_W, BG_H), Image.LANCZOS)
-                return np.array(img_resized)
-            else:
-                # 16:9 or non-vertical image: fit full width and pad seamlessly
-                bg_color = img.getpixel((8, 8))
-                fit_w = BG_W
-                fit_h = int(ih * (BG_W / iw))
-                img_fit = img.resize((fit_w, fit_h), Image.LANCZOS)
-                canvas = Image.new("RGB", (BG_W, BG_H), bg_color)
-                paste_y = max(0, (BG_H - fit_h) // 2 - 60)
-                canvas.paste(img_fit, (0, paste_y))
-                return np.array(canvas)
-        except Exception:
-            return None
-
-    # Load main background image
-    main_bg_np = prepare_bg_np(image_path)
-
-    # Load all background options for 2-second switching
-    bg_np_list = []
-    if main_bg_np is not None:
-        bg_np_list.append(main_bg_np)
-
-    if bg_image_paths:
-        for p in bg_image_paths:
-            if p != image_path and os.path.exists(p):
-                arr = prepare_bg_np(p)
-                if arr is not None:
-                    bg_np_list.append(arr)
-
-    if not bg_np_list:
-        bg_np_list = [np.zeros((BG_H, BG_W, 3), dtype=np.uint8)]
-
-    raw_frames, used_gesture, final_cx = build_presenter_sequence(
-        narration=narration or "",
-        total_frames=N,
-        scene_index=scene_index,
-        cy=1380.0,
-        s=2.6,
-        bg_color=(0, 0, 0, 0),
-        last_gesture=last_gesture,
-        last_cx=last_cx,
+    pytoon_renderer.render_pytoon_vertical_scene(
+        image_path=image_path,
+        audio_path=audio_path,
+        text=narration,
+        output_path=output_path,
+        duration=duration,
+        fps=fps,
+        ffmpeg=ffmpeg,
+        channel=channel_name
     )
-
-    import tempfile
-    wav_tmp = tempfile.mktemp(suffix=".wav")
-    subprocess.run([ffmpeg, "-y", "-i", audio_path, wav_tmp],
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    vf = f"fps=fps={fps}"
-    af = f"aresample=async=1,atrim=end={V_dur:.6f},apad"
-    cmd = [ffmpeg, "-y",
-           "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{BG_W}x{BG_H}", "-r", str(fps), "-i", "pipe:0",
-           "-i", wav_tmp,
-           "-vf", vf, "-af", af,
-           "-c:v", "libx264", "-bf", "0", "-preset", "fast", "-crf", "18",
-           "-c:a", "pcm_s16le", "-pix_fmt", "yuv420p",
-           "-t", f"{V_dur:.6f}", output_path]
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    paste_y = BG_H - STICK_H + 20
-    paste_x = int(BG_W * 0.5) - STICK_W // 2   # center horizontally in vertical frame
-
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (17, 17))
-    if bg_switch_sec and bg_switch_sec > 0:
-        switch_interval_frames = max(1, int(round(bg_switch_sec * fps)))
-    else:
-        switch_interval_frames = N + 10000
-
-    for fi, stick_raw in enumerate(raw_frames):
-        stick_np = np.array(stick_raw)
-        stick_scaled_np = cv2.resize(stick_np, (STICK_W, STICK_H), interpolation=cv2.INTER_CUBIC)
-
-        h, w, c = stick_scaled_np.shape
-        padded_np = np.zeros((h + PAD*2, w + PAD*2, 4), dtype=np.uint8)
-        padded_np[PAD:PAD+h, PAD:PAD+w] = stick_scaled_np
-
-        alpha = padded_np[:, :, 3]
-        dilated_alpha = cv2.dilate(alpha, kernel)
-
-        stroke_np = np.zeros_like(padded_np)
-        stroke_np[:, :, :3] = 255
-        stroke_np[:, :, 3] = dilated_alpha
-
-        mask = (alpha > 0)
-        stroke_np[mask] = padded_np[mask]
-
-        # Switch background image every 2 seconds (bg_switch_sec)
-        bg_idx = (scene_index * 3 + (fi // switch_interval_frames)) % len(bg_np_list)
-        comp_np = bg_np_list[bg_idx].copy()
-
-        dy_start = max(0, paste_y - PAD)
-        dx_start = paste_x - PAD
-        sh, sw, _ = stroke_np.shape
-
-        dy_end = min(BG_H, dy_start + sh)
-        dx_end = min(BG_W, dx_start + sw)
-
-        sh_clip = dy_end - dy_start
-        sw_clip = dx_end - dx_start
-
-        if sh_clip > 0 and sw_clip > 0:
-            overlay = stroke_np[:sh_clip, :sw_clip]
-            overlay_rgb = overlay[:, :, :3]
-            overlay_alpha = overlay[:, :, 3:4].astype(np.uint16)
-
-            target = comp_np[dy_start:dy_end, dx_start:dx_end].astype(np.uint16)
-            comp_np[dy_start:dy_end, dx_start:dx_end] = (
-                ((overlay_rgb.astype(np.uint16) * overlay_alpha) + target * (255 - overlay_alpha)) // 255
-            ).astype(np.uint8)
-
-        proc.stdin.write(comp_np.tobytes())
-
-    proc.stdin.close()
-    proc.wait()
-
-    try:
-        os.remove(wav_tmp)
-    except Exception:
-        pass
-
-    return used_gesture, final_cx
+    return "explain", 360
 
 def generate_short_video(state):
     proj_dir = get_active_project_dir()
@@ -1357,7 +1129,7 @@ def generate_short_video(state):
     vertical_style_suffix = cfg["vertical_suffix"]
 
     # 4. Interactive loop for vertical images
-    from hf_image_gen import generate_image_hf_vertical
+    from gflow_assistant import generate_imagen_image
 
     for idx, scene in enumerate(scenes):
         scene_key = str(idx + 1)
@@ -1414,10 +1186,10 @@ def generate_short_video(state):
                     break
                 version += 1
 
-            print(f"Generating vertical image {scene_key}/{len(scenes)} (version {version})...")
-            telegram_bot.send_message(f"🖼️ Generating 9:16 image {scene_key}/{len(scenes)} (version {version})...")
+            print(f"Generating vertical image {scene_key}/{len(scenes)} (version {version}) via Google Imagen (gflow)...")
+            telegram_bot.send_message(f"🖼️ Generating 9:16 image {scene_key}/{len(scenes)} (version {version}) via Google Imagen (gflow)...")
             
-            img_success = generate_image_hf_vertical(full_prompt, short_image_path)
+            img_success = generate_imagen_image(full_prompt, short_image_path, aspect_ratio="9:16")
             if not img_success or not os.path.exists(short_image_path):
                 telegram_bot.send_message(f"⚠️ Image generation failed for Short Scene {scene_key}. Retrying...")
                 time.sleep(3)
@@ -1511,24 +1283,13 @@ def generate_short_video(state):
         else:
             # Auto-generate native 9:16 vertical image for this short scene
             short_vertical_suffix = (
-                ". 9:16 vertical clean 2D cartoon doodle illustration. "
-                "STYLE & COLOR: Pure 2D flat doodle cartoon objects with thick clean black marker outlines. "
-                "100% flat 2D vector style, clean flat colors. Plain solid light neutral background."
+                ". 9:16 vertical storytime background illustration, cinematic 2D cartoon webcomic style, vibrant detailed scene."
             )
             full_prompt = (scene.get("image_prompt") or narration) + short_vertical_suffix
-            print(f"[Shorts] Generating native 9:16 vertical image for Short Scene V{scene_key}...")
-            gen_ok = generate_image_hf_vertical(full_prompt, version1_path)
-            if gen_ok and os.path.exists(version1_path):
-                image_path = version1_path
-            else:
-                num_str = f"{img_scene_num:02d}"
-                image_path = os.path.join(proj_dir, "06_Images", "Final", f"Scene_{num_str}.png")
-                if not os.path.exists(image_path):
-                    image_path = os.path.join(proj_dir, "06_Images", "Approved", f"Scene_{num_str}.png")
-            if not os.path.exists(image_path) and idx < len(approved_img_pool):
-                image_path = approved_img_pool[idx]
-            if not os.path.exists(image_path) and approved_img_pool:
-                image_path = approved_img_pool[idx % len(approved_img_pool)]
+            print(f"[Shorts] Generating native 9:16 vertical image for Short Scene V{scene_key} via Google Imagen (gflow)...")
+            from gflow_assistant import generate_imagen_image
+            gen_ok = generate_imagen_image(full_prompt, version1_path, aspect_ratio="9:16")
+            image_path = version1_path if (os.path.exists(version1_path) and os.path.getsize(version1_path) > 1000) else version1_path
 
         short_voice_dir = os.path.join(shorts_dir, "voice")
         os.makedirs(short_voice_dir, exist_ok=True)
@@ -1651,16 +1412,21 @@ def create_final_deliverables(state):
     # Helper to extract parts
     def get_seo_section(text, header_names):
         for name in header_names:
-            pattern = rf"(?:^|\n)\*?\*?{name}\*?\*?:?\s*(.*?)(?=\n\*?\*?(?:SEO Title|SEO Description|Description|Keywords|Tags|Hashtags|Thumbnail Prompt)\*?\*?:|\Z)"
+            pattern = rf"(?:^|\n)[*_\s]*{name}[*_\s]*:[*_\s]*(.*?)(?=\n[*_\s]*(?:SEO Title|SEO Description|Description|Keywords|Tags|Hashtags|Thumbnail Title|Thumbnail Text|Thumbnail Concept|Thumbnail Prompt)[*_\s]*:|\Z)"
             match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
             if match:
-                return match.group(1).strip()
+                raw_val = match.group(1).strip()
+                raw_val = re.sub(r'^(?:\*\*|\*|__|_)\s*', '', raw_val)
+                raw_val = re.sub(r'\s*(?:\*\*|\*|__|_)$', '', raw_val)
+                return raw_val.strip()
         return ""
 
     desc = get_seo_section(seo_text, ["SEO Description", "Description"])
     keywords = get_seo_section(seo_text, ["Keywords"])
     tags = get_seo_section(seo_text, ["Tags"])
     hashtags = get_seo_section(seo_text, ["Hashtags"])
+    thumb_title = get_seo_section(seo_text, ["Thumbnail Title", "Thumbnail Text", "Thumbnail Hook"])
+    thumb_concept = get_seo_section(seo_text, ["Thumbnail Concept", "Thumbnail Prompt"])
     
     # Default fallbacks if parsing misses anything
     if not desc: desc = f"Educational documentary about {state['topic']}. Title: {state['title']}"
@@ -1668,6 +1434,13 @@ def create_final_deliverables(state):
     if not tags: tags = keywords
     if not hashtags: hashtags = f"#{state['topic'].replace(' ', '')} #education"
     
+    # Clean up Hashtags.md content so it is clearly formatted without stray asterisks
+    hashtags_body = hashtags.strip()
+    if thumb_title:
+        hashtags_body += f"\n\nThumbnail Title: {thumb_title}"
+    if thumb_concept:
+        hashtags_body += f"\n\nThumbnail Concept: {thumb_concept}"
+
     # Save SEO files
     with open(os.path.join(proj_dir, "02_SEO", "Description.md"), "w", encoding="utf-8") as f:
         f.write(desc)
@@ -1676,7 +1449,7 @@ def create_final_deliverables(state):
     with open(os.path.join(proj_dir, "02_SEO", "Tags.md"), "w", encoding="utf-8") as f:
         f.write(tags)
     with open(os.path.join(proj_dir, "02_SEO", "Hashtags.md"), "w", encoding="utf-8") as f:
-        f.write(hashtags)
+        f.write(hashtags_body)
         
     print("Saved individual SEO files.")
     
@@ -1686,29 +1459,58 @@ def create_final_deliverables(state):
         telegram_bot.send_message(f"📋 *SEO Metadata Generated:*\n\n{chunk}")
     
     # 3. Generate Subtitles File (SRT)
-    srt_path = os.path.join(proj_dir, "09_Subtitles", "Subtitle.srt")
+    srt_dir = os.path.join(proj_dir, "09_Subtitles")
+    os.makedirs(srt_dir, exist_ok=True)
+    srt_path = os.path.join(srt_dir, "Subtitle.srt")
+    timeline_path = os.path.join(proj_dir, "14_Checkpoints", "Scene_Timeline.json")
     scenes = parse_scenes_from_file()
-    current_time = 0.0
-    with open(srt_path, "w", encoding="utf-8") as f:
-        for idx, scene in enumerate(scenes):
-            num = f"{scene['number']:02d}"
-            audio_path = os.path.join(proj_dir, "07_Voice", f"Scene_{num}_Voice.wav")
-            duration = get_audio_duration(audio_path) if os.path.exists(audio_path) else 5.0
-            
-            start_h = int(current_time // 3600)
-            start_m = int((current_time % 3600) // 60)
-            start_s = current_time % 60
-            
-            end_time = current_time + duration
-            end_h = int(end_time // 3600)
-            end_m = int((end_time % 3600) // 60)
-            end_s = end_time % 60
-            
-            f.write(f"{idx+1}\n")
-            f.write(f"{start_h:02d}:{start_m:02d}:{int(start_s):02d},{int((start_s%1)*1000):03d} --> ")
-            f.write(f"{end_h:02d}:{end_m:02d}:{int(end_s):02d},{int((end_s%1)*1000):03d}\n")
-            f.write(f"{scene['narration']}\n\n")
-            current_time = end_time
+
+    if os.path.exists(timeline_path):
+        with open(timeline_path, "r", encoding="utf-8") as f:
+            tl = json.load(f)
+        tl_map = {s["number"]: s for s in tl.get("scenes", [])}
+        with open(srt_path, "w", encoding="utf-8") as f:
+            srt_idx = 1
+            for scene in scenes:
+                narr = (scene.get("narration") or "").strip()
+                if not narr or is_title_card_scene(scene):
+                    continue
+                s_info = tl_map.get(scene["number"])
+                if s_info:
+                    st = s_info["start"]
+                    en = s_info["end"]
+                else:
+                    st = 0.0
+                    en = 5.0
+                start_h, start_m, start_s = int(st // 3600), int((st % 3600) // 60), st % 60
+                end_h, end_m, end_s = int(en // 3600), int((en % 3600) // 60), en % 60
+                f.write(f"{srt_idx}\n")
+                f.write(f"{start_h:02d}:{start_m:02d}:{int(start_s):02d},{int((start_s%1)*1000):03d} --> ")
+                f.write(f"{end_h:02d}:{end_m:02d}:{int(end_s):02d},{int((end_s%1)*1000):03d}\n")
+                f.write(f"{narr}\n\n")
+                srt_idx += 1
+    else:
+        current_time = 0.0
+        with open(srt_path, "w", encoding="utf-8") as f:
+            for idx, scene in enumerate(scenes):
+                num = f"{scene['number']:02d}"
+                audio_path = os.path.join(proj_dir, "07_Voice", f"Scene_{num}_Voice.wav")
+                duration = get_audio_duration(audio_path) if os.path.exists(audio_path) else 5.0
+                
+                start_h = int(current_time // 3600)
+                start_m = int((current_time % 3600) // 60)
+                start_s = current_time % 60
+                
+                end_time = current_time + duration
+                end_h = int(end_time // 3600)
+                end_m = int((end_time % 3600) // 60)
+                end_s = end_time % 60
+                
+                f.write(f"{idx+1}\n")
+                f.write(f"{start_h:02d}:{start_m:02d}:{int(start_s):02d},{int((start_s%1)*1000):03d} --> ")
+                f.write(f"{end_h:02d}:{end_m:02d}:{int(end_s):02d},{int((end_s%1)*1000):03d}\n")
+                f.write(f"{scene['narration']}\n\n")
+                current_time = end_time
     print("Saved Subtitle.srt")
     
     # 4. Generate Clean Subtitle Script (Text Upload File)
@@ -1735,12 +1537,17 @@ def create_final_deliverables(state):
     timestamps_dir = os.path.join(proj_dir, "16_Timestamps")
     os.makedirs(timestamps_dir, exist_ok=True)
     try:
-        timestamps_text = generate_youtube_timestamps(proj_dir)
         timestamps_path = os.path.join(timestamps_dir, "Timestamps.txt")
-        with open(timestamps_path, "w", encoding="utf-8") as f:
-            f.write(timestamps_text)
-        print("Saved Timestamps.txt")
-        telegram_bot.send_message(f"⏱️ *Timestamps generated and saved to '16_Timestamps/Timestamps.txt'*\n\n```\n{timestamps_text}\n```")
+        if os.path.exists(timestamps_path) and os.path.getsize(timestamps_path) > 50:
+            with open(timestamps_path, "r", encoding="utf-8") as f:
+                timestamps_text = f.read()
+            print("Loaded existing Timestamps.txt")
+        else:
+            timestamps_text = generate_youtube_timestamps(proj_dir)
+            with open(timestamps_path, "w", encoding="utf-8") as f:
+                f.write(timestamps_text)
+            print("Saved Timestamps.txt")
+        telegram_bot.send_message(f"⏱️ *Timestamps saved to '16_Timestamps/Timestamps.txt'*\n\n```\n{timestamps_text}\n```")
     except Exception as e:
         print(f"Error generating timestamps: {e}")
         append_log(f"Error generating timestamps: {e}")
@@ -1774,6 +1581,7 @@ def create_final_deliverables(state):
         channel_cfg = get_channel_config()
         channel_name = channel_cfg.get("profile", channel_cfg.get("name", "history")).lower()
         titles_md = os.path.join(proj_dir, "02_SEO", "Titles.md")
+        hashtags_md = os.path.join(proj_dir, "02_SEO", "Hashtags.md")
         selected_title = state.get("title", "Secrets Revealed")
         if os.path.exists(titles_md):
             with open(titles_md, "r", encoding="utf-8") as f:
@@ -1782,45 +1590,44 @@ def create_final_deliverables(state):
                 if m:
                     selected_title = m.group(1).strip()
 
-        # Dynamic clickbait hook text based on title & channel
-        st_lower = selected_title.lower()
-        if "freeze" in st_lower or "ice" in st_lower:
-            default_click_text = "WHY NO FREEZE?!"
-        elif "money" in st_lower or "rich" in st_lower or "bank" in st_lower or "wealth" in st_lower:
-            default_click_text = "SECRET TO RICHES!"
-        elif "space" in st_lower or "black hole" in st_lower or "star" in st_lower or "universe" in st_lower or "planet" in st_lower or "science" in st_lower:
-            default_click_text = "COSMIC SECRETS!"
-        elif channel_name == "money":
-            default_click_text = "HOW THEY GOT RICH!"
-        elif channel_name == "science":
-            default_click_text = "HOW IT WORKS!"
+        # 1. Check 02_SEO/Hashtags.md for AI-generated Thumbnail Title & Concept
+        custom_thumb_title = None
+        custom_thumb_concept = None
+        if os.path.exists(hashtags_md):
+            with open(hashtags_md, "r", encoding="utf-8") as f:
+                h_content = f.read()
+                m_title = re.search(r"[*_\s]*Thumbnail Title[*_\s]*:[*_\s]*([^\n\r]+)", h_content, re.IGNORECASE)
+                if m_title and m_title.group(1).strip():
+                    custom_thumb_title = thumbnail_generator.sanitize_thumbnail_text(m_title.group(1).strip())
+                m_concept = re.search(r"[*_\s]*Thumbnail (?:Concept|Prompt)[*_\s]*:[*_\s]*(.+)", h_content, re.IGNORECASE | re.DOTALL)
+                if m_concept and m_concept.group(1).strip():
+                    custom_thumb_concept = thumbnail_generator.sanitize_prompt_text(m_concept.group(1).strip())
+
+        if custom_thumb_title:
+            click_text = thumbnail_generator.sanitize_thumbnail_text(custom_thumb_title)
+            print(f"\n🎨 Loaded Sanitized Thumbnail Title from 02_SEO/Hashtags.md: '{click_text}'")
         else:
-            default_click_text = "HOW THEY SURVIVED!"
+            # Derive punchy clickbait thumbnail hook directly from SEO title & channel
+            st_lower = selected_title.lower()
+            if "freeze" in st_lower or "ice" in st_lower:
+                click_text = "WHY NO FREEZE?!"
+            elif "meteor" in st_lower or "space" in st_lower or "jewel" in st_lower or "star" in st_lower:
+                click_text = "FROM SPACE?!"
+            elif "money" in st_lower or "rich" in st_lower or "bank" in st_lower or "wealth" in st_lower:
+                click_text = "SECRET TO RICHES!"
+            elif "black hole" in st_lower or "universe" in st_lower:
+                click_text = "COSMIC SECRETS!"
+            elif channel_name == "money":
+                click_text = "HOW THEY GOT RICH!"
+            elif channel_name == "science":
+                click_text = "HOW IT WORKS!"
+            else:
+                click_text = "THE ANCIENT TRUTH!"
 
-        # First ask user on Telegram for Thumbnail Title Text
-        print("\n📲 Prompting user on Telegram for Thumbnail Title Text...")
-        buttons = [[
-            {"text": f"Use Default: '{default_click_text}' 🚀", "callback_data": "use_default_title"}
-        ]]
-        prompt_msg = telegram_bot.send_message(
-            f"🖼️ *Thumbnail Title Prompt*\n\n"
-            f"Video Title: _{selected_title}_\n\n"
-            f"Reply to this message with your desired **Thumbnail Title Text** (e.g. `THE SECRET REVEALED!`), or click the button below to use default:",
-            buttons=buttons
-        )
-
-        reply = get_user_interaction(prompt_msg)
-        clean_reply = reply.replace("text:", "").strip()
-
-        if clean_reply and clean_reply.lower() not in ["use_default_title", "default", "ok", "yes"]:
-            click_text = clean_reply.upper()
-            telegram_bot.send_message(f"✅ *Thumbnail Title Set:* `{click_text}`")
-        else:
-            click_text = default_click_text
-            telegram_bot.send_message(f"✅ *Using Default Thumbnail Title:* `{click_text}`")
+        print(f"\n🎨 Selected Thumbnail Hook Text: '{click_text}' (Title: '{selected_title}')")
+        telegram_bot.send_message(f"🎨 *Selected Thumbnail Hook from SEO:* `{click_text}`\nGenerating thumbnail options...")
 
         # Interactive Thumbnail Generation (Generates suggestion + Telegram Approve / Regenerate buttons)
-        import thumbnail_generator
         all_scenes_prompts = []
         if os.path.exists(scene_list_path):
             try:
@@ -1845,8 +1652,10 @@ def create_final_deliverables(state):
             topic_str = state.get("topic", "").strip()
             title_str = selected_title.strip()
             
-            # Ensure main topic object (e.g. Black Hole, Golden Vault) is ALWAYS the central subject
-            if any(k in (topic_str + title_str).lower() for k in ["black hole", "blackhole", "event horizon", "singularity"]):
+            # Use custom concept from Hashtags.md if available, otherwise topic object
+            if custom_thumb_concept and thumb_count == 1:
+                main_object_prompt = custom_thumb_concept
+            elif any(k in (topic_str + title_str).lower() for k in ["black hole", "blackhole", "event horizon", "singularity"]):
                 main_object_prompt = "A colossal, glowing, terrifying supermassive black hole with a vibrant accretion disk warping space and light"
             elif any(k in (topic_str + title_str).lower() for k in ["money", "rich", "wealth", "bank", "billionaire"]):
                 main_object_prompt = "A massive open golden vault filled with stacks of money, gold coins, and gold bars"
@@ -1859,12 +1668,13 @@ def create_final_deliverables(state):
                 scene_ref = all_scenes_prompts[prompt_idx][:90]
                 bg_prompt = f"{main_object_prompt}, {scene_ref}"
 
-            print(f"\n🎨 Generating Thumbnail Option #{thumb_count} (Main Subject: '{main_object_prompt[:50]}...', Pose: {pose_name}, Text: '{click_text}')...")
+            print(f"\n🎨 Generating Thumbnail Option #{thumb_count} (Main Subject: '{main_object_prompt[:50]}...', Pose: {pose_name}, Text: '{click_text}', Channel: {channel_name})...")
             thumbnail_generator.generate_thumbnail(
                 prompt=bg_prompt,
                 text_overlay=click_text,
                 pose_name=pose_name,
-                output_path=thumb_path
+                output_path=thumb_path,
+                channel=channel_name
             )
 
             if os.path.exists(thumb_path):
@@ -1886,7 +1696,7 @@ def create_final_deliverables(state):
                     buttons=buttons
                 )
 
-                choice = get_user_interaction(select_msg)
+                choice = get_user_interaction(select_msg, timeout=60, default_choice="approve_thumb")
                 clean_choice = choice.replace("text:", "").strip()
                 clean_lower = clean_choice.lower()
                 
@@ -1901,9 +1711,9 @@ def create_final_deliverables(state):
                         f"Reply to this message with your **New Thumbnail Title Text** (e.g. `THE SECRET REVEALED!`):"
                     )
                     text_reply = get_user_interaction(text_prompt_msg)
-                    new_text = text_reply.replace("text:", "").strip().upper()
+                    new_text = text_reply.replace("text:", "").strip()
                     if new_text and new_text.lower() not in ["cancel", "back", "no"]:
-                        click_text = new_text
+                        click_text = thumbnail_generator.sanitize_thumbnail_text(new_text)
                         telegram_bot.send_message(f"✅ *Thumbnail Title Reset To:* `{click_text}`")
                     else:
                         telegram_bot.send_message("ℹ️ *Thumbnail title text unchanged.*")
@@ -1983,13 +1793,15 @@ def reset_pipeline():
 _REGEN_LOCK: set = set()
 
 
-def get_user_interaction(sent_msg):
+def get_user_interaction(sent_msg, timeout=None, default_choice=None):
     """
     Wrapper for wait_for_interaction that intercepts the global '/reset' command
     from Telegram at any step, resets state, and re-executes the script.
     """
-    choice = telegram_bot.wait_for_interaction(sent_msg)
-    raw_choice = choice.replace("text:", "").strip().lower()
+    choice = telegram_bot.wait_for_interaction(sent_msg, timeout=timeout, default_choice=default_choice)
+    if not choice and default_choice:
+        choice = default_choice
+    raw_choice = (choice or "").replace("text:", "").strip().lower()
     if raw_choice in ["/reset", "reset"]:
         print("Global reset command received. Resetting pipeline to Step 1...")
         reset_pipeline()
@@ -2082,13 +1894,9 @@ def get_user_interaction(sent_msg):
                     gen_prompt = prompt + f" (Seed variation {random.randint(10000, 999999)}, new dynamic composition)"
                     telegram_bot.send_message(f"🔄 *Regenerating Scene V{formatted_num}...*")
                     try:
-                        from hf_image_gen import generate_image_hf
-                        generate_image_hf(gen_prompt, target_file, aspect_ratio="16:9")
+                        from gflow_assistant import generate_imagen_image
+                        generate_imagen_image(gen_prompt, target_file, aspect_ratio="16:9")
                         if os.path.exists(target_file):
-                            # Apply PIL text overlay for accurate spelling
-                            from image_text_overlay import apply_prompt_labels
-                            apply_prompt_labels(target_file, prompt)
-
                             # Copy to Approved and Final folders
                             app_path = os.path.join(img_dir, "Approved", f"Scene_{formatted_num}.png")
                             fin_path = os.path.join(img_dir, "Final", f"Scene_{formatted_num}.png")
@@ -2174,27 +1982,30 @@ def get_channel_config(profile_override=None):
     else:
         niche = "Ancient Humans, Anthropology, Evolution, Lost History"
 
+    if profile == "money":
+        char_dna = "RECURRING MAIN CHARACTER: The exact same recurring 2D stickman mascot: a cute minimalist 2D stick figure with a solid smooth vibrant-yellow round head (#F9D342), thick black marker outline, simple expressive black dot eyes, wearing story-appropriate attire (e.g. sharp tailored black business suit jacket with white collared dress shirt and red necktie), black stick arms and legs."
+    elif profile == "science":
+        char_dna = "RECURRING MAIN CHARACTER: The exact same recurring 2D stickman mascot: a cute minimalist 2D stick figure with a solid smooth pure white round head (#FFFFFF), thick black marker outline, simple expressive black dot eyes, wearing oversized round clear cartoon safety goggles with black rims and a crisp white scientist knee-length lab coat over a teal shirt, black stick arms and legs."
+    else:
+        char_dna = "RECURRING MAIN CHARACTER: The exact same recurring 2D stickman mascot: a cute minimalist 2D stick figure with a solid smooth tan-brown round head (#C89B78), thick black marker outline, simple expressive black dot eyes, small neat black mustache and tiny chin goatee, wearing dynamic era-appropriate clothing matching the exact historical era of the story (e.g. prehistoric animal fur wrap for Stone Age, linen kilt for Ancient Egypt, classical tunic for Antiquity, medieval tunic for Middle Ages), black stick arms and legs."
+
     widescreen_suffix = (
-        ". 16:9 clean 2D cartoon doodle illustration. "
-        "STYLE & COLOR: Pure 2D flat doodle cartoon objects with thick clean black marker outlines. "
-        "VIBRANT FLAT SOLID COLOR FILLS for all objects (rich vibrant colors like deep blue, warm red, bright yellow, green, gold — NEVER leave objects white, plain, or uncolored). "
-        "100% flat 2D vector style, clean flat colors, no 3D, no clay, no heavy gradients. "
-        "COMPOSITION: Clean layout with 1 or multiple key doodle objects as described in the prompt. "
-        "BACKGROUND: Plain solid light neutral color only — light cream, pale gray, soft pale blue, or white. "
-        "NO purple backgrounds. NO orange backgrounds. NO gradients. NO patterns. NO abstract floating shapes. "
-        "NO characters. NO people. NO stick figures. NO text. NO words. "
-        "Premium quality 2D doodle icon style."
+        f". Full-bleed 16:9 widescreen 2D cartoon doodle illustration in the distinct hand-drawn webcomic animation style of Mack and Zenn. "
+        f"{char_dna} "
+        f"STYLE: 2D minimalist webcomic doodle art, bold clean thick black ink marker outlines, solid flat cel-shaded colors, playful cartoon energy. "
+        f"AUTHENTIC OBJECT COLORS: Light blue sky with white clouds, vibrant GREEN tree leaves on brown trunks, fresh green grass, natural earth ground. Strictly NO monochrome yellow wash over trees or background. "
+        f"COMPOSITION: Full landscape scene filling the entire 16:9 canvas corner-to-corner with zero borders and zero white margins. "
+        f"NO realistic humans. NO photorealism. NO 3D rendering. NO borders. NO white margins. "
+        f"TEXT RULE: Strictly NEVER add white floating text. Strictly NEVER add text in image corners. Any required text must be authentic hand-drawn bold black marker doodle lettering cleanly integrated into the scene (e.g. on wooden signs, hanging plaques, banners, pie charts, or labels)."
     )
     vertical_suffix = (
-        ". 9:16 vertical clean 2D cartoon doodle illustration. "
-        "STYLE & COLOR: Pure 2D flat doodle cartoon objects with thick clean black marker outlines. "
-        "VIBRANT FLAT SOLID COLOR FILLS for all objects (rich vibrant colors like deep blue, warm red, bright yellow, green, gold — NEVER leave objects white, plain, or uncolored). "
-        "100% flat 2D vector style, clean flat colors, no 3D, no clay, no heavy gradients. "
-        "COMPOSITION: Clean layout with 1 or multiple key doodle objects as described in the prompt. "
-        "BACKGROUND: Plain solid light neutral color only — light cream, pale gray, soft pale blue, or white. "
-        "NO purple backgrounds. NO orange backgrounds. NO gradients. NO patterns. NO abstract floating shapes. "
-        "NO characters. NO people. NO stick figures. NO text. NO words. "
-        "Premium quality 2D doodle icon style."
+        f". Full-bleed 9:16 vertical 2D cartoon doodle illustration in the distinct hand-drawn webcomic animation style of Mack and Zenn. "
+        f"{char_dna} "
+        f"STYLE: 2D minimalist webcomic doodle art, bold clean thick black ink marker outlines, solid flat cel-shaded colors. "
+        f"AUTHENTIC OBJECT COLORS: Light blue sky with white clouds, vibrant GREEN tree leaves on brown trunks, fresh green grass, natural earth ground. Strictly NO monochrome yellow wash over trees or background. "
+        f"COMPOSITION: Full vertical portrait scene filling the entire 9:16 canvas top-to-bottom with zero borders. "
+        f"NO realistic humans. NO photorealism. NO 3D rendering. NO borders. NO white margins. "
+        f"TEXT RULE: Strictly NEVER add white floating text. Strictly NEVER add text in image corners. Any required text must be authentic hand-drawn bold black marker doodle lettering cleanly integrated into the scene (e.g. on wooden signs, hanging plaques, banners, pie charts, or labels)."
     )
 
     return {
@@ -2363,7 +2174,7 @@ def run_workflow():
             telegram_bot.send_message(f"Title suggestions:\n\n{titles_text}")
             select_msg = telegram_bot.send_message("Please select the title you want to use:", buttons)
             
-            choice = get_user_interaction(select_msg)
+            choice = get_user_interaction(select_msg, timeout=60, default_choice="title:0")
             if choice == "title:regen":
                 telegram_bot.send_message("Regenerating title ideas...")
                 continue
@@ -2444,7 +2255,7 @@ def run_workflow():
         custom_script = script
 
         while not script_approved:
-            choice = get_user_interaction(select_msg)
+            choice = get_user_interaction(select_msg, timeout=60, default_choice="approve_script")
             raw_lower = choice.lower().strip()
 
             # 1. User Approves Script
@@ -2595,7 +2406,7 @@ def run_workflow():
         
         breakdown_approved = False
         while not breakdown_approved:
-            choice = get_user_interaction(select_msg)
+            choice = get_user_interaction(select_msg, timeout=60, default_choice="approve_breakdown")
             raw_lower = choice.lower().strip()
 
             if choice in ["approve", "approve_breakdown"] or "approve" in raw_lower or "/approve" in raw_lower:
@@ -2680,33 +2491,10 @@ def run_workflow():
             prompt = _re.sub(r'  +', ' ', prompt).strip()
 
             profile = cfg["profile"]
-            # Strip character descriptions for ALL channels so AI generates clean background scenes only (presenter stickman is composited on top)
-            import re as _re
-            prompt = _re.sub(r'(?:The main character|A cute 2D minimalist doodle stick figure).*?\.(?=\s|$)', '', prompt, flags=_re.IGNORECASE)
-            prompt = _re.sub(r'He wears (?:a waist-length|a black hoodie).*?\.(?=\s|$)', '', prompt, flags=_re.IGNORECASE)
-            prompt = _re.sub(r'He stands.*?\.(?=\s|$)', '', prompt, flags=_re.IGNORECASE)
-            prompt = _re.sub(r'He is (?:positioned|pointing|holding|dressed|shown).*?\.(?=\s|$)', '', prompt, flags=_re.IGNORECASE)
-            prompt = _re.sub(r'  +', ' ', prompt).strip()
             
-            bg_lock = (
-                "Clean 2D cartoon doodle illustration. "
-                "Pure 2D flat doodle objects with thick clean black marker outlines and vibrant flat solid color fills for all objects (rich vibrant colors — NEVER leave objects white or uncolored). "
-                "100% flat 2D vector style, clean flat colors, no 3D, no clay. "
-                "Plain solid light neutral background — light cream, pale gray, soft pale blue, or white only. "
-                "NO purple backgrounds. NO orange backgrounds. NO gradients. NO patterns. NO floating shapes. "
-                "NO characters. NO people. NO stick figures. NO text. "
-            )
-            full_prompt = bg_lock + prompt + style_suffix
+            full_prompt = f"{prompt} {style_suffix}".strip()
 
 
-            # Extract labels for PIL overlay (do NOT send TEXT ON IMAGE to model — PIL handles it)
-            from image_text_overlay import extract_labels_from_prompt, overlay_text_labels
-            quoted_texts = re.findall(r'"([^"]{1,25})"', prompt)
-            overlay_labels = []
-            if quoted_texts:
-                skip = {"style","doodle","webcomic","minimalist","solid","flat","stop","no","yes","disagree","agree"}
-                overlay_labels = [t for t in dict.fromkeys(quoted_texts) if len(t) <= 15 and t.lower() not in skip and (t[0].isupper() or any(c in t for c in "$%0123456789"))]
-            # Model prompt: no TEXT ON IMAGE instruction (PIL handles text)
             full_prompt = ". ".join(list(dict.fromkeys(full_prompt.split(". "))))
             prompt_txt_path = os.path.join(get_active_project_dir(), "05_Image_Prompts", f"Scene_{num}_Prompt.txt")
             with open(prompt_txt_path, "w", encoding="utf-8") as f:
@@ -2718,7 +2506,6 @@ def run_workflow():
                 "num": num,
                 "scene_idx": scene_idx,
                 "prompt": full_prompt,
-                "overlay_labels": overlay_labels,
                 "output_path": image_path,
                 "padded_filename": padded_filename,
                 "narration": scene.get("narration", ""),
@@ -2728,7 +2515,7 @@ def run_workflow():
 
         # ── Process Scenes in 5-Image Batches ─────────────────────────────────
         BATCH_SIZE = 5
-        from hf_image_gen import generate_image_hf, generate_batch_hf
+        from gflow_assistant import generate_batch_imagen_images, generate_imagen_image
         import random
 
         for batch_start in range(0, len(all_scene_data), BATCH_SIZE):
@@ -2769,20 +2556,18 @@ def run_workflow():
             if missing_batch:
                 print(f"[Step 6] Concurrently generating {len(missing_batch)} missing unapproved images in batch {batch_num}/{total_batches} via Google Flow (gflow 3x pool)...")
                 try:
-                    from gflow_assistant import generate_batch_imagen_images
                     generate_batch_imagen_images(missing_batch, img_dir, aspect_ratio="16:9")
                 except Exception as e:
-                    print(f"[Step 6] gflow batch exception: {e}. Falling back to Cloudflare Workers...")
-                    generate_batch_hf(missing_batch)
+                    print(f"[Step 6] gflow batch exception: {e}. Retrying sequentially via gflow...")
+                    for item in missing_batch:
+                        try:
+                            generate_imagen_image(item["prompt"], item["output_path"], aspect_ratio="16:9")
+                        except Exception:
+                            pass
 
-                from image_text_overlay import overlay_text_labels
                 for item in missing_batch:
                     num = item["num"]
                     if os.path.exists(item["output_path"]):
-                        # Apply PIL text overlay for accurate spelling
-                        labels = item.get("overlay_labels", [])
-                        if labels:
-                            overlay_text_labels(item["output_path"], labels)
                         checkpoints[num] = {
                             "worker_api": "google_imagen_gflow",
                             "scene_number": num,
@@ -2793,9 +2578,7 @@ def run_workflow():
                 with open(chk_path, "w", encoding="utf-8") as f:
                     json.dump(checkpoints, f, indent=4)
 
-            # Phase 1.5: ABSOLUTE RECOVERY GUARANTEE — Ensure 100% of images exist on disk before Telegram dispatch
-            from gflow_assistant import generate_imagen_image
-            from hf_image_gen import generate_image_hf, reset_worker_state
+            # Phase 1.5: ABSOLUTE RECOVERY GUARANTEE — Ensure 100% of images exist on disk before Telegram dispatch via gflow
             for item in batch:
                 num = item["num"]
                 img_p = item["output_path"]
@@ -2803,16 +2586,24 @@ def run_workflow():
                 while (not os.path.exists(img_p) or os.path.getsize(img_p) < 1000) and retry_cnt < 3:
                     retry_cnt += 1
                     print(f"[Step 6 Recovery Guarantee] Scene V{num} image missing (Attempt {retry_cnt}/3). Generating via gflow...")
-                    success = False
                     try:
-                        success = generate_imagen_image(item["prompt"], img_p, aspect_ratio="16:9")
+                        generate_imagen_image(item["prompt"], img_p, aspect_ratio="16:9")
                     except Exception:
                         pass
-                    if not success or not os.path.exists(img_p) or os.path.getsize(img_p) < 1000:
-                        print(f"[Step 6 Recovery Fallback] Generating Scene V{num} via Cloudflare Workers...")
-                        reset_worker_state()
-                        generate_image_hf(item["prompt"], img_p, aspect_ratio="16:9")
                     time.sleep(0.5)
+
+            # Safety Guard: Ensure all images in the batch were actually generated
+            missing_items = [item for item in batch if not os.path.exists(item["output_path"]) or os.path.getsize(item["output_path"]) < 1000]
+            if missing_items:
+                missing_nums = [it["num"] for it in missing_items]
+                msg = f"⚠️ *Batch {batch_num}/{total_batches} Generation Paused*\nScenes {missing_nums} could not be rendered (Google Flow usage limit active).\nPausing 5 minutes before next retry cycle..."
+                print(f"[Step 6 Batch Guard] {msg}", flush=True)
+                try:
+                    telegram_bot.send_message(msg)
+                except Exception:
+                    pass
+                time.sleep(300)
+                continue
 
             # Phase 2: Send the images to Telegram in albums of 5
             telegram_bot.send_message(f"📸 *Batch {batch_num}/{total_batches} Ready! (Scenes {batch[0]['num']}..{batch[-1]['num']})*\nReview images below:")
@@ -2852,170 +2643,21 @@ def run_workflow():
                     batch_approved_set.add(num)
 
             buttons = build_batch_buttons(batch, batch_approved_set)
-            ctrl_msg = telegram_bot.send_message(
-                f"🎨 *Batch {batch_num}/{total_batches} Review (Scenes {batch[0]['num']}..{batch[-1]['num']})*\n"
-                f"Tap scene numbers below to approve, or reply `/reject N` to regenerate:",
+            select_msg = telegram_bot.send_message(
+                f"🎨 *Batch {batch_num}/{total_batches} Delivered (Scenes {batch[0]['num']}..{batch[-1]['num']})*\n"
+                f"Buttons are active if you wish to regenerate any scene:",
                 buttons=buttons
             )
-
-            while len(batch_approved_set) < len(batch):
-                choice = get_user_interaction(ctrl_msg)
-                raw_lower = choice.lower().strip()
-
-                # Approve All Batch
-                if choice in ["approve_all_batch", "approve_all"] or "approve_all" in raw_lower or "approve all" in raw_lower:
-                    for item in batch:
-                        batch_approved_set.add(item["num"])
-                        checkpoints[item["num"]] = checkpoints.get(item["num"], {})
-                        checkpoints[item["num"]]["status"] = "approved"
-                    with open(chk_path, "w", encoding="utf-8") as f:
-                        json.dump(checkpoints, f, indent=4)
-                    telegram_bot.send_message(f"✅ *All {len(batch)} images in Batch {batch_num} approved!*")
-                    break
-
-                # Handle Individual Button Clicks: approve_XX or reject_XX
-                elif choice.startswith("approve_"):
-                    n_raw = choice.split("approve_", 1)[1].strip()
-                    try:
-                        n_int = int(n_raw)
-                        matched_item = next((b for b in batch if int(b["num"]) == n_int), None)
-                    except ValueError:
-                        matched_item = next((b for b in batch if b["num"] == n_raw), None)
-
-                    if matched_item:
-                        n = matched_item["num"]
-                        batch_approved_set.add(n)
-                        checkpoints[n] = checkpoints.get(n, {})
-                        checkpoints[n]["status"] = "approved"
-                        with open(chk_path, "w", encoding="utf-8") as f:
-                            json.dump(checkpoints, f, indent=4)
-                        telegram_bot.send_message(f"✅ *Scene V{n} approved!* ({len(batch_approved_set)}/{len(batch)} in batch)")
-
-                elif choice == "__regen_handled__":
-                    pass  # Instant regen already completed in get_user_interaction; skip batch re-processing
-
-                elif choice.startswith("reject_") or choice.startswith("regen_"):
-                    t_raw = re.sub(r"^(reject_|regen_)", "", choice).strip()
-                    try:
-                        t_int = int(t_raw)
-                        target = next((item for item in batch if int(item["num"]) == t_int), None)
-                    except ValueError:
-                        target = next((item for item in batch if item["num"] == t_raw), None)
-
-                    if target:
-                        t_num = target["num"]
-                        if t_num in batch_approved_set:
-                            batch_approved_set.remove(t_num)
-                        if os.path.exists(target["output_path"]):
-                            try:
-                                os.remove(target["output_path"])
-                            except Exception:
-                                pass
-                        # Regen lock: prevent duplicate concurrent regen for same scene
-                        if t_num in _REGEN_LOCK:
-                            telegram_bot.send_message(f"⏳ Scene V{t_num} is already regenerating...")
-                            continue
-                        _REGEN_LOCK.add(t_num)
-
-                        gen_prompt = target["prompt"] + f" (Seed variation {random.randint(10000,999999)}, new dynamic composition)"
-                        telegram_bot.send_message(f"🔄 *Regenerating Scene V{t_num} via Google Imagen (gflow)...*")
-                        try:
-                            from gflow_assistant import generate_imagen_image
-                            success = generate_imagen_image(gen_prompt, target["output_path"], aspect_ratio="16:9")
-                            if not success or not os.path.exists(target["output_path"]) or os.path.getsize(target["output_path"]) < 1000:
-                                print(f"[Regen Fallback] Falling back to Cloudflare Workers for V{t_num}...")
-                                generate_image_hf(gen_prompt, target["output_path"], aspect_ratio="16:9")
-                            
-                            if os.path.exists(target["output_path"]):
-                                # Apply PIL text overlay for accurate spelling
-                                from image_text_overlay import overlay_text_labels
-                                labels = target.get("overlay_labels", [])
-                                if labels:
-                                    overlay_text_labels(target["output_path"], labels)
-                                checkpoints[t_num] = {
-                                    "worker_api": "google_imagen_gflow",
-                                    "scene_number": t_num,
-                                    "filename": target["padded_filename"],
-                                    "status": "pending",
-                                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
-                                }
-                                with open(chk_path, "w", encoding="utf-8") as f:
-                                    json.dump(checkpoints, f, indent=4)
-                                regen_buttons = [
-                                    [
-                                        {"text": f"✅ Approve V{t_num}", "callback_data": f"approve_{t_num}"},
-                                        {"text": f"🔄 Reject V{t_num}", "callback_data": f"reject_{t_num}"}
-                                    ]
-                                ]
-                                # Send ONLY the regenerated image (not the whole batch)
-                                telegram_bot.send_photo(
-                                    photo_path=target["output_path"],
-                                    caption=f"🔄 *Regenerated V{t_num}* — \"{target['narration'][:80]}\"",
-                                    buttons=regen_buttons
-                                )
-                            else:
-                                telegram_bot.send_message(f"⚠️ Regeneration produced no output file for Scene V{t_num}.")
-                        except Exception as e:
-                            telegram_bot.send_message(f"⚠️ Failed to regenerate Scene V{t_num}: {e}")
-                        finally:
-                            _REGEN_LOCK.discard(t_num)
-
-                elif choice.startswith("text:"):
-                    cmd_text = choice.split("text:", 1)[1].strip()
-                    cmd_lower = cmd_text.lower()
-
-                    if "/approve_all" in cmd_lower or "approve_all" in cmd_lower:
-                        for item in batch:
-                            batch_approved_set.add(item["num"])
-                        telegram_bot.send_message(f"✅ *All {len(batch)} images in Batch {batch_num} approved!*")
-                        break
-
-                    elif cmd_lower.startswith("/approve") or cmd_lower.startswith("approve "):
-                        nums = [f"{int(x):02d}" for x in re.findall(r"\b\d+\b", cmd_text)]
-                        for n in nums:
-                            if any(b["num"] == n for b in batch):
-                                batch_approved_set.add(n)
-                                checkpoints[n] = checkpoints.get(n, {})
-                                checkpoints[n]["status"] = "approved"
-                                telegram_bot.send_message(f"✅ *Scene V{n} approved!* ({len(batch_approved_set)}/{len(batch)} in batch)")
-                        with open(chk_path, "w", encoding="utf-8") as f:
-                            json.dump(checkpoints, f, indent=4)
-
-                    elif cmd_lower.startswith("/reject") or cmd_lower.startswith("/regen"):
-                        rej_nums = [f"{int(x):02d}" for x in re.findall(r"\b\d+\b", cmd_text)]
-                        if not rej_nums:
-                            telegram_bot.send_message("Usage: `/reject 7` or `/reject 2 5 9` (use scene numbers)")
-                            continue
-
-                        for t_num in rej_nums:
-                            target = next((item for item in batch if item["num"] == t_num), None)
-                            if target:
-                                if t_num in batch_approved_set:
-                                    batch_approved_set.remove(t_num)
-                                if os.path.exists(target["output_path"]):
-                                    try:
-                                        os.remove(target["output_path"])
-                                    except Exception:
-                                        pass
-                                gen_prompt = target["prompt"] + f" (Seed variation {random.randint(10000,999999)}, new dynamic composition)"
-                                telegram_bot.send_message(f"🔄 *Regenerating fresh Scene V{t_num} via Cloudflare Workers...*")
-                                try:
-                                    generate_image_hf(gen_prompt, target["output_path"], aspect_ratio="16:9")
-                                    if os.path.exists(target["output_path"]):
-                                        checkpoints[t_num] = {
-                                            "worker_api": "cloudflare_workers",
-                                            "scene_number": t_num,
-                                            "filename": target["padded_filename"],
-                                            "status": "pending",
-                                            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
-                                        }
-                                        with open(chk_path, "w", encoding="utf-8") as f:
-                                            json.dump(checkpoints, f, indent=4)
-                                        telegram_bot.send_photo(photo_path=target["output_path"], caption=f"🔄 *Updated Scene V{t_num}* ({target['padded_filename']})\n\"{target['narration']}\"")
-                                    else:
-                                        telegram_bot.send_message(f"⚠️ Regeneration produced no output file for Scene V{t_num}.")
-                                except Exception as e:
-                                    telegram_bot.send_message(f"⚠️ Failed to regenerate Scene V{t_num}: {e}")
+            # Wait up to 30s for any user tap (e.g. Re-gen button) or auto-approve and proceed
+            choice = get_user_interaction(select_msg, timeout=30, default_choice="approve_all_batch")
+            while choice and choice == "__regen_handled__":
+                choice = get_user_interaction(select_msg, timeout=30, default_choice="approve_all_batch")
+            for item in batch:
+                batch_approved_set.add(item["num"])
+                checkpoints[item["num"]] = checkpoints.get(item["num"], {})
+                checkpoints[item["num"]]["status"] = "approved"
+            with open(chk_path, "w", encoding="utf-8") as f:
+                json.dump(checkpoints, f, indent=4)
 
             # Once all 10 in batch are approved: copy to Approved & Final, save checkpoint
             for item in batch:
@@ -3040,7 +2682,36 @@ def run_workflow():
 
             telegram_bot.send_message(f"🎉 *Batch {batch_num}/{total_batches} Complete & Saved!* Advancing to next batch...")
 
-        telegram_bot.send_message("✅ *All image batches approved & saved!* Moving to Voice Generation...")
+        # ── End of Step 6: Wait for Final Confirmation before Step 8 ─────────────
+        total_images_saved = len(state.get("approved_scenes", {}))
+        confirm_msg = telegram_bot.send_message(
+            f"🎉 *STEP 6 COMPLETE: All {total_images_saved} Images Generated & Saved!*\n\n"
+            f"📁 *Image Directory:* `06_Images/Approved/`\n"
+            f"🛑 *Pipeline Paused for Final Confirmation:*\n"
+            f"Please review your images. When you are ready to proceed to Voiceover & Video Compilation, click below:",
+            buttons=[
+                [{"text": "🚀 Proceed to Voice & Video", "callback_data": "proceed_step_8"}],
+                [{"text": "⏸️ Keep Paused / Reviewing", "callback_data": "keep_paused"}]
+            ]
+        )
+        print("\n" + "="*70)
+        print(f"🛑 STEP 6 COMPLETE: All {total_images_saved} images generated & saved!")
+        print("PAUSED FOR FINAL CONFIRMATION. Waiting for explicit user approval...")
+        print("="*70 + "\n", flush=True)
+
+        while True:
+            choice = get_user_interaction(confirm_msg, timeout=None, default_choice=None)
+            raw = (choice or "").replace("text:", "").strip().lower()
+            if raw in ["proceed_step_8", "proceed", "yes", "approve", "/proceed", "/approve"]:
+                print("[Step 6 Final Confirmation] User approved! Proceeding to Step 8...", flush=True)
+                telegram_bot.send_message("🚀 *Confirmation Received!* Starting Step 8: Voice Generation...")
+                break
+            elif raw in ["keep_paused", "wait", "pause"]:
+                telegram_bot.send_message("⏸️ *Pipeline Remaining Paused.* Standing by for your confirmation.")
+                time.sleep(10)
+            else:
+                time.sleep(5)
+
         state["step"] = 8
         save_state(state)
         save_checkpoint(state, "Checkpoint_ImageGeneration.json")
@@ -3053,12 +2724,23 @@ def run_workflow():
 
 
     # ─── STEP 8: Voice Generation ─────────────────────────────────────────────
+    # ─── STEP 8: Voice Generation & Timeline Alignment (Contiguous Master Call) ──
     if state["step"] == 8:
         print("\n--- STEP 8: Voice Generation ---")
         scenes = parse_scenes_from_file()
         voice_dir = os.path.join(get_active_project_dir(), "07_Voice")
         os.makedirs(voice_dir, exist_ok=True)
         import voiceover
+
+        # ── Pre-TTS Script & Narration QA Audit Gate ────────────────────────
+        import pipeline_qa_auditor
+        pipeline_qa_auditor.auto_fix_duplicate_narrations(get_active_project_dir())
+        auditor = pipeline_qa_auditor.QAAuditor(get_active_project_dir())
+        script_qa = auditor.audit_script_and_narration()
+        if not script_qa["passed"]:
+            err_msg = "\n".join(auditor.critical_errors[:5])
+            telegram_bot.send_message(f"🚨 *Script QA Failed before Voiceover:*\n\n{err_msg}")
+            print(f"[Step 8 Script QA FAILED]\n{err_msg}")
 
         telegram_bot.send_message(f"🎙️ *STEP 8: Voice Generation*\nGenerating full-script narration in 1 single call for natural flow ({len(scenes)} scenes)...")
 
@@ -3115,13 +2797,29 @@ def run_workflow():
 
 
 
-    # ─── STEP 10: Video Editing & Compiling (Hard-Locked Per-Scene Slicing Architecture) ──────
+    # ─── STEP 10: Video Editing & Compiling (Single-Pass PyToon Zero-Drift Architecture) ──────
     if state["step"] == 10:
-        print("\n--- STEP 10: Video Editing (Hard-Locked Per-Scene Slicing) ---")
-        telegram_bot.send_message("🎬 *STEP 10: Video Editing*\nSlicing master audio into per-scene clips → assembling hard-locked video...")
+        print("\n--- STEP 10: Video Editing (Single-Pass PyToon Zero-Drift Render) ---")
 
-        import slice_and_assemble_per_scene
-        slice_and_assemble_per_scene.main()
+        # ── Comprehensive Pre-Render QA Gate (Prevents 45-min Render Waste) ──
+        import pipeline_qa_auditor
+        auditor = pipeline_qa_auditor.QAAuditor(get_active_project_dir())
+        qa_result = auditor.run_full_qa()
+        if not qa_result["passed"]:
+            err_summary = "\n".join(auditor.critical_errors[:5])
+            telegram_bot.send_message(
+                f"🚨 *PRE-RENDER QA AUDIT FAILED!*\n"
+                f"Video compilation halted to prevent render defects.\n\n"
+                f"{err_summary}\n\n"
+                f"📄 Detailed report saved to: `13_Logs/QA_PreRender_Report.md`"
+            )
+            print(f"[Step 10 QA BLOCKED] Critical errors detected. Halting compilation.\n{err_summary}")
+            return
+
+        telegram_bot.send_message("🎬 *STEP 10: Video Editing*\nRendering full video with 1:1 Word Sync & PyToon Wav2Vec2 Neural Lip-Sync...")
+
+        import render_final_single_pass
+        render_final_single_pass.main()
 
         state["step"] = 11
         save_state(state)
@@ -3150,7 +2848,7 @@ def run_workflow():
             buttons
         )
         
-        choice = get_user_interaction(select_msg)
+        choice = get_user_interaction(select_msg, timeout=45, default_choice="skip_short")
         choice_clean = choice.replace("text:", "").strip().lower()
         if choice in ["generate_short", "text:generate_short", "text:/short"] or ("short" in choice_clean and "skip" not in choice_clean):
             generate_short_video(state)
@@ -3178,7 +2876,7 @@ def run_workflow():
             buttons
         )
         
-        choice = get_user_interaction(select_msg)
+        choice = get_user_interaction(select_msg, timeout=120, default_choice="publish")
         if choice == "publish":
             telegram_bot.send_message("Uploading and publishing to YouTube...")
             # Step 14 upload logic trigger (placeholder / scheduled success)

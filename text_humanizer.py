@@ -1,4 +1,4 @@
-﻿"""
+"""
 text_humanizer.py
 Converts raw written script text (numbers, currency, years, percentages,
 abbreviations, symbols) into 100% natural, human-spoken English for TTS engines.
@@ -219,8 +219,8 @@ def humanize_text(text: str) -> str:
 
     text = re.sub(r"\b\d[\d,]*\b", _sub_general_numbers, text)
 
-    # 11. Common Acronyms, Abbreviations & Special Symbols
-    replacements = [
+    # 11. Common Abbreviations & Special Symbols (Case-Insensitive)
+    case_insensitive_replacements = [
         (r"\s*&\s*", " and "),
         (r"\s*@\s*", " at "),
         (r"\bvs\.?", "versus"),
@@ -234,16 +234,25 @@ def humanize_text(text: str) -> str:
         (r"\bmph\b", "miles per hour"),
         (r"°C\b", " degrees Celsius"),
         (r"°F\b", " degrees Fahrenheit"),
-        (r"\bAI\b", "A.I."),
-        (r"\bCEO\b", "C.E.O."),
-        (r"\bUSA\b", "U.S.A."),
-        (r"\bUS\b", "U.S."),
-        (r"\bUSD\b", "U.S. dollars"),
-        (r"\bFed\b", "Federal Reserve"),
     ]
 
-    for pat, rep in replacements:
+    for pat, rep in case_insensitive_replacements:
         text = re.sub(pat, rep, text, flags=re.IGNORECASE)
+
+    # 12. Case-Sensitive Uppercase Acronyms (STRICTLY NO re.IGNORECASE to protect lowercase words like 'us')
+    case_sensitive_replacements = [
+        (r"\bUSA\b", "U.S.A."),
+        (r"\bUSD\b", "U.S. dollars"),
+        (r"\bAI\b", "A.I."),
+        (r"\bCEO\b", "C.E.O."),
+        (r"\bFed\b", "Federal Reserve"),
+        # Only replace 'US' if followed by national/governmental context or in 'the US'
+        (r"\bthe\s+US\b", "the U.S."),
+        (r"\bUS\s+(government|military|dollar|economy|navy|army|president|senate|congress|citizens?|passports?|borders?|states?|markets?|patents?)\b", r"U.S. \1"),
+    ]
+
+    for pat, rep in case_sensitive_replacements:
+        text = re.sub(pat, rep, text)
 
     # Collapse repeated spaces
     text = re.sub(r"\s+", " ", text).strip()

@@ -14,9 +14,8 @@ active_project.json
 agent_state.json
 worker_state.json
 gemini_key_state.json
-.gflow_project_id
-.gflow_current_profile
-.gflow_active_project
+.gflow/
+.gflow*
 crash.log
 *.log
 run_debug*

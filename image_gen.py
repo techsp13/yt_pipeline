@@ -19,7 +19,7 @@ def generate_image(prompt, filename, style="vector_illustration", image_size="la
     else:
         aspect = "16:9"
 
-    print(f"[image_gen] Generating image via gflow (Aspect: {aspect}): {prompt[:80]}...")
+    print(f"[image_gen] Generating image strictly via gflow (Aspect: {aspect}): {prompt[:80]}...")
     try:
         from gflow_assistant import generate_imagen_image
         success = generate_imagen_image(prompt, filename, aspect_ratio=aspect)
@@ -27,18 +27,7 @@ def generate_image(prompt, filename, style="vector_illustration", image_size="la
             print(f"[image_gen] ✅ Successfully generated via gflow -> {filename}")
             return True
     except Exception as e:
-        print(f"[image_gen] ⚠️ gflow error: {e}. Falling back to Cloudflare...")
-
-    # Fallback to Cloudflare Workers
-    try:
-        from hf_image_gen import generate_image_hf
-        print(f"[image_gen] 🔄 Generating via Cloudflare Workers fallback...")
-        generate_image_hf(prompt, filename, aspect_ratio=aspect)
-        if os.path.exists(filename) and os.path.getsize(filename) > 1000:
-            print(f"[image_gen] ✅ Successfully generated via Cloudflare fallback -> {filename}")
-            return True
-    except Exception as e:
-        print(f"[image_gen] ❌ Cloudflare fallback error: {e}")
+        print(f"[image_gen] ❌ gflow error: {e}")
 
     return False
 

@@ -1,0 +1,100 @@
+{
+    "emotions": {
+        "explain": [
+            {
+                "image_files": {
+                    "open": "/poses/1_open.png",
+                    "middle": "/poses/1_middle.png",
+                    "shut": "/poses/1_shut.png"
+                },
+                "mouth_coordinates": {
+                    "x": 512.0,
+                    "y": 430.0,
+                    "scale_x": 0.46,
+                    "scale_y": 0.46,
+                    "flip_x": false,
+                    "rotation": 0.0
+                }
+            },
+            {
+                "image_files": {
+                    "open": "/poses/2_open.png",
+                    "middle": "/poses/2_middle.png",
+                    "shut": "/poses/2_shut.png"
+                },
+                "mouth_coordinates": {
+                    "x": 512.0,
+                    "y": 430.0,
+                    "scale_x": 0.46,
+                    "scale_y": 0.46,
+                    "flip_x": false,
+                    "rotation": 0.0
+                }
+            }
+        ],
+        "happy": [
+            {
+                "image_files": {
+                    "open": "/poses/1_open.png",
+                    "middle": "/poses/1_middle.png",
+                    "shut": "/poses/1_shut.png"
+                },
+                "mouth_coordinates": {
+                    "x": 512.0,
+                    "y": 430.0,
+                    "scale_x": 0.46,
+                    "scale_y": 0.46,
+                    "flip_x": false,
+                    "rotation": 0.0
+                }
+            },
+            {
+                "image_files": {
+                    "open": "/poses/3_open.png",
+                    "middle": "/poses/3_middle.png",
+                    "shut": "/poses/3_shut.png"
+                },
+                "mouth_coordinates": {
+                    "x": 512.0,
+                    "y": 430.0,
+                    "scale_x": 0.46,
+                    "scale_y": 0.46,
+                    "flip_x": false,
+                    "rotation": 0.0
+                }
+            }
+        ],
+        "rhetorical": [
+            {
+                "image_files": {
+                    "open": "/poses/3_open.png",
+                    "middle": "/poses/3_middle.png",
+                    "shut": "/poses/3_shut.png"
+                },
+                "mouth_coordinates": {
+                    "x": 512.0,
+                    "y": 430.0,
+                    "scale_x": 0.46,
+                    "scale_y": 0.46,
+                    "flip_x": false,
+                    "rotation": 0.0
+                }
+            },
+            {
+                "image_files": {
+                    "open": "/poses/2_open.png",
+                    "middle": "/poses/2_middle.png",
+                    "shut": "/poses/2_shut.png"
+                },
+                "mouth_coordinates": {
+                    "x": 512.0,
+                    "y": 430.0,
+                    "scale_x": 0.46,
+                    "scale_y": 0.46,
+                    "flip_x": false,
+                    "rotation": 0.0
+                }
+            }
+        ]
+    }
+}

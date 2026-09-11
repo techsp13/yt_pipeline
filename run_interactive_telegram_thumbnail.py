@@ -124,10 +124,10 @@ def main():
     clean_reply = reply.replace("text:", "").strip()
 
     if clean_reply and clean_reply.lower() not in ["use_default_title", "default", "ok", "yes"]:
-        click_text = clean_reply.upper()
+        click_text = thumbnail_generator.sanitize_thumbnail_text(clean_reply)
         telegram_bot.send_message(f"✅ *Thumbnail Title Set:* `{click_text}`")
     else:
-        click_text = default_click_text
+        click_text = thumbnail_generator.sanitize_thumbnail_text(default_click_text)
         telegram_bot.send_message(f"✅ *Using Default Thumbnail Title:* `{click_text}`")
 
     # Interactive loop

@@ -168,7 +168,7 @@ def send_media_group(image_items):
 
     try:
         response = None
-        for attempt in range(2):
+        for attempt in range(5):
             opened_files = []
             try:
                 files = {}
@@ -182,11 +182,23 @@ def send_media_group(image_items):
             finally:
                 for f in opened_files:
                     f.close()
-            if response is None or response.status_code != 400:
-                break
-            # First 400: retry with plaintext captions (Markdown entity errors)
-            for m_item in media:
-                m_item.pop("parse_mode", None)
+            
+            if response is not None and response.status_code == 429:
+                try:
+                    retry_after = response.json().get("parameters", {}).get("retry_after", 8)
+                except Exception:
+                    retry_after = 8
+                print(f"[Telegram Flood Wait] Rate limited (429). Sleeping {retry_after + 2}s before retry...", flush=True)
+                time.sleep(retry_after + 2)
+                continue
+            
+            if response is not None and response.status_code == 400:
+                for m_item in media:
+                    m_item.pop("parse_mode", None)
+                continue
+                
+            break
+
         if response is not None and response.status_code != 200:
             print(f"[Telegram API Response] sendMediaGroup Status: {response.status_code}, Body: {response.text}")
         if response is None:
@@ -201,7 +213,7 @@ def send_media_group(image_items):
             res = send_photo(path, caption=cap)
             if res:
                 results.append(res)
-            time.sleep(0.5)
+            time.sleep(1.0)
         return results if results else None
 
 
@@ -235,6 +247,38 @@ def send_audio(audio_path, caption=None, buttons=None):
             return response.json()
     except Exception as e:
         print(f"[Telegram ERROR] Failed to send audio: {e}")
+        return None
+
+def send_video(video_path, caption=None, buttons=None):
+    """Sends an MP4 video file with optional caption and inline buttons."""
+    if not is_telegram_configured():
+        print(f"\n[Telegram MOCK] Sending Video: {video_path} (Caption: {caption})")
+        if buttons:
+            return send_message(caption or "Select an action:", buttons)
+        return {"mock": True}
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendVideo"
+    payload = {"chat_id": TELEGRAM_CHAT_ID}
+    if caption:
+        if len(caption) > 1000:
+            caption = caption[:997] + "..."
+        payload["caption"] = caption
+        payload["parse_mode"] = "Markdown"
+    if buttons:
+        payload["reply_markup"] = json.dumps({"inline_keyboard": buttons})
+
+    try:
+        with open(video_path, "rb") as f:
+            files = {"video": f}
+            response = requests.post(url, data=payload, files=files, timeout=90)
+            if response.status_code == 400 and "parse" in response.text.lower():
+                payload.pop("parse_mode", None)
+                f.seek(0)
+                response = requests.post(url, data=payload, files=files, timeout=90)
+            response.raise_for_status()
+            return response.json()
+    except Exception as e:
+        print(f"[Telegram ERROR] Failed to send video: {e}")
         return None
 
 def send_document(file_path, caption=None, buttons=None):
@@ -293,14 +337,16 @@ def flush_telegram_updates():
     except Exception as e:
         print(f"[Telegram] Warning during update queue flush: {e}")
 
-def wait_for_interaction(sent_message_result):
+def wait_for_interaction(sent_message_result, timeout=None, default_choice=None):
     """
     Blocks execution and polls Telegram getUpdates for an inline button click
     corresponding to the sent message, or any text message if sent_message_result is None.
+    If timeout (seconds) is reached without interaction and default_choice is provided,
+    auto-progresses with default_choice.
     """
     global LAST_TELEGRAM_OFFSET
     if sent_message_result and isinstance(sent_message_result, dict) and sent_message_result.get("mock"):
-        return sent_message_result.get("selected", "approve")
+        return sent_message_result.get("selected", default_choice or "approve")
 
     valid_message_ids = set()
     if isinstance(sent_message_result, list):
@@ -311,19 +357,29 @@ def wait_for_interaction(sent_message_result):
         valid_message_ids.add(sent_message_result["result"]["message_id"])
 
     if valid_message_ids:
-        print(f"Waiting for Telegram approval/interaction on message(s) {list(valid_message_ids)}...")
+        print(f"Waiting for Telegram approval/interaction on message(s) {list(valid_message_ids)} (timeout={timeout}s, default={default_choice})...")
     else:
-        print("Waiting for any Telegram text command/interaction...")
+        print(f"Waiting for any Telegram text command/interaction (timeout={timeout}s, default={default_choice})...")
 
     # Always sync offset to the latest pending message (+1) so historical clicks NEVER auto-trigger!
     if LAST_TELEGRAM_OFFSET is None:
         flush_telegram_updates()
 
-
     offset = LAST_TELEGRAM_OFFSET
+    start_time = time.time()
 
     # Ultra-responsive poll loop (1s timeout for instant button response)
     while True:
+        # Check timeout for autonomous progression
+        if timeout is not None and default_choice is not None:
+            if (time.time() - start_time) >= timeout:
+                print(f"[Telegram Auto-Progress] {timeout}s elapsed without manual interaction. Auto-selecting '{default_choice}'...")
+                try:
+                    send_message(f"⚡ *Auto-Progressing:* (Timeout {timeout}s). Auto-selected default `{default_choice}`. Continuing pipeline...")
+                except Exception:
+                    pass
+                return default_choice
+
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
         params = {"timeout": 1}
         if offset:
@@ -350,7 +406,7 @@ def wait_for_interaction(sent_message_result):
                     if callback_query_id:
                         ans_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery"
                         try:
-                            requests.post(ans_url, json={"callback_query_id": callback_query_id}, timeout=3)
+                            requests.post(ans_url, json={"callback_query_id": callback_query_id, "text": "🔄 Processing tap..."}, timeout=3)
                         except Exception:
                             pass
                     

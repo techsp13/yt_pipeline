@@ -47,8 +47,14 @@ def main():
     AGENT_DIR   = r"D:\youtube_automation_agent"
     ACTIVE_JSON = os.path.join(AGENT_DIR, "active_project.json")
 
-    with open(ACTIVE_JSON, encoding="utf-8") as f:
-        ACTIVE_PROJ = json.load(f)["active_project_dir"]
+    if len(sys.argv) > 1 and os.path.isdir(sys.argv[1]):
+        ACTIVE_PROJ = os.path.abspath(sys.argv[1])
+    elif os.path.exists(ACTIVE_JSON):
+        with open(ACTIVE_JSON, encoding="utf-8") as f:
+            ACTIVE_PROJ = json.load(f)["active_project_dir"]
+    else:
+        # Fallback to current working dir or error
+        ACTIVE_PROJ = os.getcwd()
 
     VOICE_DIR      = os.path.join(ACTIVE_PROJ, "07_Voice")
     CHECKPOINT_DIR = os.path.join(ACTIVE_PROJ, "14_Checkpoints")
@@ -77,20 +83,34 @@ def main():
     print(f"Total Video Frames   : {total_frames} frames (at {FPS} FPS = {total_frames/FPS:.4f}s)")
 
     # 1. Load scenes
-    with open(SCRIPT_JSON, encoding="utf-8") as f:
-        script = json.load(f)
-    scenes = script if isinstance(script, list) else script.get("scenes", [])
+    if os.path.exists(SCRIPT_JSON):
+        with open(SCRIPT_JSON, encoding="utf-8") as f:
+            script = json.load(f)
+        scenes = script if isinstance(script, list) else script.get("scenes", [])
+    else:
+        import youtube_agent
+        scenes = youtube_agent.parse_scenes_from_file()
+        with open(SCRIPT_JSON, "w", encoding="utf-8") as f:
+            json.dump(scenes, f, indent=4)
+
+    # Strip leading scenes that have no narration, because master audio starts with the first spoken scene
+    first_spoken_idx = 0
+    for idx, sc in enumerate(scenes):
+        if sc.get("is_title_card", False) or sc.get("scene_type", "") == "title_card":
+            continue
+        if clean_narration(sc.get("narration", "")):
+            first_spoken_idx = idx
+            break
 
     valid_scenes = []
-    for sc in scenes:
+    for sc in scenes[first_spoken_idx:]:
         if sc.get("is_title_card", False) or sc.get("scene_type", "") == "title_card":
             continue
         narr = clean_narration(sc.get("narration", ""))
-        if narr and len(narr) >= 2:
-            valid_scenes.append((sc, narr))
+        valid_scenes.append((sc, narr))
 
     N = len(valid_scenes)
-    print(f"Valid Narration Scenes: {N}")
+    print(f"Total Video Scenes for Timeline: {N} (skipped {first_spoken_idx} leading silent scenes)")
 
     # 2. Forced alignment with faster_whisper
     os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
@@ -111,7 +131,7 @@ def main():
     for seg in seg_iter:
         seg_count += 1
         pct = min(100, int((seg.end / total_dur) * 100))
-        print(f"  ⏳ [Transcription Progress] {seg.end:.1f}s / {total_dur:.1f}s ({pct}%) transcribed...", end="\r", flush=True)
+        print(f"  [Transcription Progress] {seg.end:.1f}s / {total_dur:.1f}s ({pct}%) transcribed...", end="\r", flush=True)
         if hasattr(seg, "words") and seg.words:
             for w in seg.words:
                 wc = re.sub(r"[^a-z0-9]", "", w.word.lower())
@@ -203,7 +223,8 @@ def main():
 
     cur_t = 0.0
     for i in range(N):
-        narr_len = len(scene_matches[i]["narr"])
+        raw_narr_len = len(scene_matches[i]["narr"])
+        narr_len = max(25, raw_narr_len)
         expected_dur = max(1.6, (narr_len / 15.0)) # ~15 chars per sec average
 
         if raw_starts[i] is not None:
@@ -211,19 +232,26 @@ def main():
             # Ensure monotone increasing with min 1.6s spacing
             if i > 0 and st_val < smoothed_starts[i-1] + 1.6:
                 st_val = smoothed_starts[i-1] + 1.6
-            # Ensure scene does not jump too far ahead of previous scene
-            if i > 0 and st_val > smoothed_starts[i-1] + (len(scene_matches[i-1]["narr"]) / 8.0) + 4.0:
-                st_val = smoothed_starts[i-1] + (len(scene_matches[i-1]["narr"]) / 12.0)
+
+            # RULE: Cannot cut previous scene if previous scene is still speaking!
+            if i > 0 and scene_matches[i-1]["matched"] and scene_matches[i-1]["en"] is not None:
+                prev_speech_end = scene_matches[i-1]["en"]
+                if st_val < prev_speech_end:
+                    st_val = prev_speech_end
+
             smoothed_starts[i] = st_val
             cur_t = st_val
         else:
-            # Interpolate unmatched scene
+            # Unmatched or silent scene: must start AFTER previous scene finishes speaking!
+            if i > 0 and scene_matches[i-1]["matched"] and scene_matches[i-1]["en"] is not None:
+                cur_t = max(cur_t, scene_matches[i-1]["en"])
+
             next_t = total_dur
-            rem_chars = sum(len(scene_matches[j]["narr"]) for j in range(i, N))
+            rem_chars = sum(max(25, len(scene_matches[k]["narr"])) for k in range(i, N))
             for j in range(i + 1, N):
                 if raw_starts[j] is not None and raw_starts[j] > cur_t:
                     next_t = raw_starts[j]
-                    rem_chars = sum(len(scene_matches[k]["narr"]) for k in range(i, j))
+                    rem_chars = sum(max(25, len(scene_matches[k]["narr"])) for k in range(i, j))
                     break
 
             avail = max(1.6, next_t - cur_t)
@@ -242,14 +270,20 @@ def main():
     for i in range(N - 1):
         # Target start frame for scene i+1
         target_f = round(smoothed_starts[i + 1] * FPS)
+
         # Must be at least prev_start + MIN_FRAMES
         target_f = max(frame_starts[i] + MIN_FRAMES, target_f)
+
+        # HARD LOCK: Cannot cut off scene i if scene i is still speaking!
+        if scene_matches[i]["matched"] and scene_matches[i]["en"] is not None:
+            min_speech_frame = round(scene_matches[i]["en"] * FPS)
+            target_f = max(target_f, min_speech_frame)
 
         # Ensure enough frames remain for rest of the scenes
         rem_scenes = N - 1 - i
         max_allowed = total_frames - (rem_scenes * MIN_FRAMES)
-        target_f = min(target_f, max_allowed)
-        target_f = max(frame_starts[i] + MIN_FRAMES, target_f)
+        if target_f > max_allowed:
+            target_f = max(frame_starts[i] + MIN_FRAMES, max_allowed)
 
         frame_ends[i] = target_f
         frame_starts[i + 1] = target_f
