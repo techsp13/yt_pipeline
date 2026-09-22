@@ -265,7 +265,10 @@ def init_project_dir(topic_name, channel="science"):
         "title": None,
         "thumbnail_concept": None,
         "script": None,
-        "approved_scenes": {}
+        "approved_scenes": {},
+        "auto_mode": True,
+        "auto_approve_images": True,
+        "auto_approve_breakdown": True
     }
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(initial_state, f, indent=4)
@@ -299,7 +302,11 @@ def load_state():
         except Exception:
             pass
 
-    if not state:
+    if state:
+        state.setdefault("auto_mode", True)
+        state.setdefault("auto_approve_images", True)
+        state.setdefault("auto_approve_breakdown", True)
+    else:
         state = {
             "step": 1,
             "topic": None,
@@ -307,7 +314,10 @@ def load_state():
             "thumbnail_concept": None,
             "script": None,
             "approved_scenes": {},
-            "active": False
+            "active": False,
+            "auto_mode": True,
+            "auto_approve_images": True,
+            "auto_approve_breakdown": True
         }
     return state
 
@@ -2175,9 +2185,11 @@ def run_workflow():
             buttons.append([{"text": "Regenerate Titles 🔄", "callback_data": "title:regen"}])
             
             telegram_bot.send_message(f"Title suggestions:\n\n{titles_text}")
-            select_msg = telegram_bot.send_message("Please select the title you want to use:", buttons)
-            
-            choice = get_user_interaction(select_msg, timeout=60, default_choice="title:0")
+            if state.get("auto_mode"):
+                print("[Auto-Approval] Title auto-approved (Option 1). Advancing immediately to Script generation...", flush=True)
+                choice = "title:0"
+            else:
+                choice = get_user_interaction(select_msg, timeout=60, default_choice="title:0")
             if choice == "title:regen":
                 telegram_bot.send_message("Regenerating title ideas...")
                 continue
@@ -2258,7 +2270,11 @@ def run_workflow():
         custom_script = script
 
         while not script_approved:
-            choice = get_user_interaction(select_msg, timeout=60, default_choice="approve_script")
+            if state.get("auto_mode"):
+                print("[Auto-Approval] Script auto-approved. Advancing immediately to Scene Breakdown...", flush=True)
+                choice = "approve_script"
+            else:
+                choice = get_user_interaction(select_msg, timeout=60, default_choice="approve_script")
             raw_lower = choice.lower().strip()
 
             # 1. User Approves Script
@@ -2655,8 +2671,8 @@ def run_workflow():
                 f"Buttons are active if you wish to regenerate any scene:",
                 buttons=buttons
             )
-            # Auto-approval mode for hands-free pipeline execution
-            if state.get("auto_mode") or state.get("auto_approve_images"):
+            # Auto-approval mode for hands-free pipeline execution (True by default until all images generated)
+            if state.get("auto_mode", True) and state.get("auto_approve_images", True):
                 print(f"[Auto-Approval] Batch {batch_num}/{total_batches} auto-approved. Advancing immediately...", flush=True)
                 choice = "approve_all_batch"
             else:

@@ -13,7 +13,10 @@ fresh_state = {
     "thumbnail_concept": None,
     "script": None,
     "approved_scenes": {},
-    "active": True
+    "active": True,
+    "auto_mode": True,
+    "auto_approve_images": True,
+    "auto_approve_breakdown": True
 }
 with open(state_path, "w", encoding="utf-8") as f:
     json.dump(fresh_state, f, indent=4)
