@@ -1995,7 +1995,7 @@ def get_channel_config(profile_override=None):
         f"Strictly NO half-screen splits, NO split frames, NO inset panels, NO horizontal dividing lines cutting the screen in half. "
         f"The scene must be a unified 100% full-screen immersive background. "
         f"NO realistic humans. NO photorealism. NO 3D rendering. NO borders. NO white margins. "
-        f"TEXT RULE: Only include deliberate in-scene environmental text explicitly specified in the prompt (e.g. computer monitor readouts, lab signs, framed posters, chalkboard formulas). Strictly NEVER add unwanted text, channel names, artist logos, watermarks, text in corners (strictly NO 'Mack and Zenn' or artist signatures), or random floating title banners across the image."
+        f"TEXT RULE: Only include deliberate in-scene environmental text explicitly specified in the prompt (e.g. computer monitor readouts, lab signs, framed posters, chalkboard diagrams). Strictly NEVER add unwanted text, channel names, artist logos, watermarks, text in corners (strictly NO 'Mack and Zenn' or artist signatures), or random floating title banners across the image."
     )
     vertical_suffix = (
         f". Full-bleed 9:16 vertical 2D cartoon doodle illustration in the distinct hand-drawn webcomic animation style of Ink Explainer. "
