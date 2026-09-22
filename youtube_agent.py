@@ -586,8 +586,8 @@ def qa_check_scene_breakdown(breakdown_file_path):
                     block = block.replace(narration_match.group(0), f'{prefix}{quoted_clean}\n')
 
 
-        # 2. QA Visual Prompt: Guarantee non-white colorful split background
-        prompt_match = re.search(r"(\*\*Image Prompt:\*\*\s*)(.*?)(\*\*Narration:\**) ", block, re.IGNORECASE | re.DOTALL)
+        # 2. QA Visual Prompt: Guarantee non-white colorful split background & comfortable camera framing
+        prompt_match = re.search(r"(\*\*Image Prompt:\*\*\s*)(.*?)(\*\*Narration:\*\*)", block, re.IGNORECASE | re.DOTALL)
         if prompt_match:
             p_prefix, raw_prompt, p_suffix = prompt_match.groups()
             cleaned_prompt = raw_prompt
@@ -595,6 +595,21 @@ def qa_check_scene_breakdown(breakdown_file_path):
                 issues_found += 1
                 cleaned_prompt = re.sub(r"solid (?:off-white|plain white)\s+background", "solid vibrant pastel split background", cleaned_prompt, flags=re.IGNORECASE)
                 fixes_applied.append(f"[{scene_id}] Replaced white background with vibrant pastel split background rule.")
+
+            # Scrub any extreme macro / extreme zoom expressions
+            macro_patterns = [
+                (r"\bextreme\s+macro\b", "comfortable medium shot"),
+                (r"\bextreme\s+close-?up\b", "comfortable medium shot"),
+                (r"\bmacro\s+shot\b", "wide view"),
+                (r"\bmicroscopic\s+cross-?section\b", "side diagram view"),
+                (r"\bmicroscopic\s+view\b", "medium wide view"),
+                (r"\bclose-up on lower face\b", "medium shot of the character")
+            ]
+            for pat, repl in macro_patterns:
+                if re.search(pat, cleaned_prompt, re.IGNORECASE):
+                    issues_found += 1
+                    cleaned_prompt = re.sub(pat, repl, cleaned_prompt, flags=re.IGNORECASE)
+                    fixes_applied.append(f"[{scene_id}] Removed extreme zoom/macro phrasing: '{pat}' -> '{repl}'.")
 
             # 3. QA Hair Color (Money Channel ONLY): Enforce solid jet-black hair
             state = load_state()
@@ -1571,11 +1586,16 @@ def create_final_deliverables(state):
         thumb_path = os.path.join(thumb_dir, "Thumbnail.png")
         root_thumb_path = os.path.join(proj_dir, "Thumbnail.png")
 
-        # Skip interactive prompt if valid Thumbnail.png is already approved & saved
-        if os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 5000:
-            print(f"[Deliverables] Valid approved Thumbnail.png already exists ({os.path.getsize(thumb_path)//1024} KB). Skipping interactive prompt...")
+        # Check if all 5 thumbnails already exist
+        all_5_exist = all(
+            os.path.exists(os.path.join(thumb_dir, f"Thumbnail_{i}.png")) and
+            os.path.getsize(os.path.join(thumb_dir, f"Thumbnail_{i}.png")) > 5000
+            for i in range(1, 6)
+        )
+        if all_5_exist and os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 5000:
+            print(f"[Deliverables] All 5 approved thumbnails already exist. Skipping generation...")
             shutil.copyfile(thumb_path, root_thumb_path)
-            telegram_bot.send_message(f"✅ *Thumbnail Already Approved!* Using existing high-quality thumbnail.")
+            telegram_bot.send_message("✅ *All 5 Thumbnails Already Available!* Using locked master thumbnail.")
             return True
 
         channel_cfg = get_channel_config()
@@ -1603,122 +1623,95 @@ def create_final_deliverables(state):
                 if m_concept and m_concept.group(1).strip():
                     custom_thumb_concept = thumbnail_generator.sanitize_prompt_text(m_concept.group(1).strip())
 
-        if custom_thumb_title:
-            click_text = thumbnail_generator.sanitize_thumbnail_text(custom_thumb_title)
-            print(f"\n🎨 Loaded Sanitized Thumbnail Title from 02_SEO/Hashtags.md: '{click_text}'")
-        else:
-            # Derive punchy clickbait thumbnail hook directly from SEO title & channel
-            st_lower = selected_title.lower()
-            if "freeze" in st_lower or "ice" in st_lower:
-                click_text = "WHY NO FREEZE?!"
-            elif "meteor" in st_lower or "space" in st_lower or "jewel" in st_lower or "star" in st_lower:
-                click_text = "FROM SPACE?!"
-            elif "money" in st_lower or "rich" in st_lower or "bank" in st_lower or "wealth" in st_lower:
-                click_text = "SECRET TO RICHES!"
-            elif "black hole" in st_lower or "universe" in st_lower:
-                click_text = "COSMIC SECRETS!"
-            elif channel_name == "money":
-                click_text = "HOW THEY GOT RICH!"
-            elif channel_name == "science":
-                click_text = "HOW IT WORKS!"
-            else:
-                click_text = "THE ANCIENT TRUTH!"
+        # 2. Mandatory 5-Thumbnail Generation (Always generate 5 distinct options for A/B testing)
+        print(f"\n🎨 Mandatory 5-Thumbnail Generation (A/B Testing Suite) for: '{selected_title}'")
+        telegram_bot.send_message(
+            f"🎨 *MANDATORY 5-THUMBNAIL A/B GENERATION*\n"
+            f"Generating 5 distinct high-CTR thumbnail options with unique hooks, poses, and backgrounds...\n"
+            f"Title: `{selected_title}`"
+        )
 
-        print(f"\n🎨 Selected Thumbnail Hook Text: '{click_text}' (Title: '{selected_title}')")
-        telegram_bot.send_message(f"🎨 *Selected Thumbnail Hook from SEO:* `{click_text}`\nGenerating thumbnail options...")
+        thumb_options = thumbnail_generator.generate_5_thumbnails(
+            proj_dir=proj_dir,
+            topic=state.get("topic", ""),
+            title=selected_title,
+            channel=channel_name,
+            custom_concept=custom_thumb_concept,
+            custom_hook=custom_thumb_title,
+            force_regen=False
+        )
 
-        # Interactive Thumbnail Generation (Generates suggestion + Telegram Approve / Regenerate buttons)
-        all_scenes_prompts = []
-        if os.path.exists(scene_list_path):
+        # 3. Send all 5 thumbnails to Telegram
+        media_items = []
+        for opt in thumb_options:
+            p = opt.get("path")
+            if p and os.path.exists(p) and os.path.getsize(p) > 1000:
+                media_items.append((p, f"🎨 *Option #{opt['id']}:* `{opt['hook']}`\n_{opt['title']}_ (Pose: {opt['pose']})"))
+
+        if media_items:
             try:
-                with open(scene_list_path, "r", encoding="utf-8") as f:
-                    all_sc = json.load(f)
-                all_scenes_prompts = [s.get("image_prompt", s.get("narration", "")) for s in all_sc if s.get("image_prompt")]
-            except Exception:
-                pass
+                telegram_bot.send_media_group(media_items)
+            except Exception as e_mg:
+                print(f"[Telegram MediaGroup Error] {e_mg}. Falling back to individual photos...")
+                for p, cap in media_items:
+                    telegram_bot.send_photo(p, caption=cap)
 
-        if not all_scenes_prompts:
-            all_scenes_prompts = [selected_title]
+        # 4. Interactive selection of active master thumbnail
+        buttons = [
+            [
+                {"text": "1️⃣ Pick #1", "callback_data": "pick_thumb_1"},
+                {"text": "2️⃣ Pick #2", "callback_data": "pick_thumb_2"},
+                {"text": "3️⃣ Pick #3", "callback_data": "pick_thumb_3"},
+            ],
+            [
+                {"text": "4️⃣ Pick #4", "callback_data": "pick_thumb_4"},
+                {"text": "5️⃣ Pick #5", "callback_data": "pick_thumb_5"},
+                {"text": "🔄 Regen 5", "callback_data": "regen_all_thumbs"}
+            ]
+        ]
+        select_msg = telegram_bot.send_message(
+            "🎨 *5 Distinct YouTube Thumbnails Ready!*\n\n"
+            "Review the 5 thumbnail options sent above and click a button below to select your active master thumbnail for YouTube upload:\n"
+            "_(Default: Option #1 auto-selected if unattended)_",
+            buttons=buttons
+        )
 
-        poses = ["mind_blown", "pointing_right", "explaining"]
-        thumb_count = 0
+        choice = get_user_interaction(select_msg, timeout=120, default_choice="pick_thumb_1")
+        clean_choice = choice.replace("text:", "").strip().lower()
 
-        approved = False
-        while not approved:
-            thumb_count += 1
-            prompt_idx = (thumb_count - 1) % len(all_scenes_prompts)
-            pose_name = poses[(thumb_count - 1) % len(poses)]
-            
-            topic_str = state.get("topic", "").strip()
-            title_str = selected_title.strip()
-            
-            # Use custom concept from Hashtags.md if available, otherwise topic object
-            if custom_thumb_concept and thumb_count == 1:
-                main_object_prompt = custom_thumb_concept
-            elif any(k in (topic_str + title_str).lower() for k in ["black hole", "blackhole", "event horizon", "singularity"]):
-                main_object_prompt = "A colossal, glowing, terrifying supermassive black hole with a vibrant accretion disk warping space and light"
-            elif any(k in (topic_str + title_str).lower() for k in ["money", "rich", "wealth", "bank", "billionaire"]):
-                main_object_prompt = "A massive open golden vault filled with stacks of money, gold coins, and gold bars"
-            else:
-                main_object_prompt = f"The main central subject representing {topic_str}"
-
-            if thumb_count == 1:
-                bg_prompt = main_object_prompt
-            else:
-                scene_ref = all_scenes_prompts[prompt_idx][:90]
-                bg_prompt = f"{main_object_prompt}, {scene_ref}"
-
-            print(f"\n🎨 Generating Thumbnail Option #{thumb_count} (Main Subject: '{main_object_prompt[:50]}...', Pose: {pose_name}, Text: '{click_text}', Channel: {channel_name})...")
-            thumbnail_generator.generate_thumbnail(
-                prompt=bg_prompt,
-                text_overlay=click_text,
-                pose_name=pose_name,
-                output_path=thumb_path,
-                channel=channel_name
+        if "regen" in clean_choice:
+            telegram_bot.send_message("🔄 *Regenerating all 5 Thumbnails with fresh variations...*")
+            thumb_options = thumbnail_generator.generate_5_thumbnails(
+                proj_dir=proj_dir,
+                topic=state.get("topic", ""),
+                title=selected_title,
+                channel=channel_name,
+                custom_concept=custom_thumb_concept,
+                custom_hook=custom_thumb_title,
+                force_regen=True
             )
+            # Re-send photos
+            media_items = [
+                (opt["path"], f"🎨 *Regenerated Option #{opt['id']}:* `{opt['hook']}`")
+                for opt in thumb_options if os.path.exists(opt.get("path", ""))
+            ]
+            if media_items:
+                telegram_bot.send_media_group(media_items)
 
-            if os.path.exists(thumb_path):
-                shutil.copyfile(thumb_path, root_thumb_path)
-                
-                buttons = [
-                    [
-                        {"text": "Approve 🚀", "callback_data": "approve_thumb"},
-                        {"text": "Regenerate 🔄", "callback_data": "regen_thumb"}
-                    ],
-                    [
-                        {"text": "✏️ Change / Reset Text", "callback_data": "reset_title_text"}
-                    ]
-                ]
-                
-                select_msg = telegram_bot.send_photo(
-                    root_thumb_path,
-                    caption=f"🎨 *Thumbnail Suggestion #{thumb_count}*\n_{selected_title}_\nText: *{click_text}*\n\nClick *Approve 🚀* to lock this thumbnail, *Regenerate 🔄* for a new pose/object, or *✏️ Change / Reset Text* to enter new title text!",
-                    buttons=buttons
-                )
+        # Pick number
+        picked_num = 1
+        for num in range(1, 6):
+            if str(num) in clean_choice or f"pick_thumb_{num}" in clean_choice:
+                picked_num = num
+                break
 
-                choice = get_user_interaction(select_msg, timeout=60, default_choice="approve_thumb")
-                clean_choice = choice.replace("text:", "").strip()
-                clean_lower = clean_choice.lower()
-                
-                if "approve" in clean_lower or clean_lower in ["approve_thumb", "approve", "publish", "yes", "/yes"]:
-                    approved = True
-                    telegram_bot.send_message(f"✅ *Thumbnail Approved!* Saved as final Thumbnail.")
-                    break
-                elif "reset" in clean_lower or "change" in clean_lower or clean_lower == "reset_title_text":
-                    text_prompt_msg = telegram_bot.send_message(
-                        f"✏️ *Reset Thumbnail Title Text*\n\n"
-                        f"Current Text: `{click_text}`\n"
-                        f"Reply to this message with your **New Thumbnail Title Text** (e.g. `THE SECRET REVEALED!`):"
-                    )
-                    text_reply = get_user_interaction(text_prompt_msg)
-                    new_text = text_reply.replace("text:", "").strip()
-                    if new_text and new_text.lower() not in ["cancel", "back", "no"]:
-                        click_text = thumbnail_generator.sanitize_thumbnail_text(new_text)
-                        telegram_bot.send_message(f"✅ *Thumbnail Title Reset To:* `{click_text}`")
-                    else:
-                        telegram_bot.send_message("ℹ️ *Thumbnail title text unchanged.*")
-                else:
-                    telegram_bot.send_message("🔄 *Generating new Thumbnail option...*")
+        picked_path = os.path.join(thumb_dir, f"Thumbnail_{picked_num}.png")
+        if os.path.exists(picked_path):
+            shutil.copyfile(picked_path, thumb_path)
+            shutil.copyfile(picked_path, root_thumb_path)
+            telegram_bot.send_message(f"✅ *Thumbnail #{picked_num} Locked as Master Thumbnail!* (All 5 options saved in `12_Thumbnail/` for A/B testing)")
+        else:
+            telegram_bot.send_message(f"✅ *Master Thumbnail Locked!* (All 5 options saved in `12_Thumbnail/`)")
     except Exception as e_thumb:
         print(f"⚠️ Thumbnail interactive notice: {e_thumb}")
         
@@ -1976,11 +1969,11 @@ def get_channel_config(profile_override=None):
             pass
 
     if profile in ["money", "business"]:
-        niche = "Money & Business Mysteries, Company Downfalls, Corporate Battles, Financial History, Economic Secrets"
+        niche = "Behavioral Economics, Cognitive Biases, Consumer Manipulation, Corporate Hubris & Downfalls, Financial Psychology, Dark Traps of Capitalism"
     elif profile == "science":
-        niche = "Cosmos, Space Exploration, Astronomy, Physics, Scientific Experiments, Future Technology, Mysteries of the Cosmos"
+        niche = "Everyday Human Biology Paradoxes, Evolutionary Warfare, Brain Neuroscience, Animal Cognition, Bodily Mysteries, Microscopic Battles"
     else:
-        niche = "Ancient Humans, Anthropology, Evolution, Lost History"
+        niche = "Prehistoric Survival, Ancient Humans & Anthropology, Lost Human Species, Primal Inventions, Ice Age Ground Reality"
 
     if profile == "money":
         char_dna = "RECURRING MAIN CHARACTER: The exact same recurring 2D stickman mascot: a cute minimalist 2D stick figure with a solid smooth vibrant-yellow round head (#F9D342), thick black marker outline, simple expressive black dot eyes, wearing story-appropriate attire (e.g. sharp tailored black business suit jacket with white collared dress shirt and red necktie), black stick arms and legs."
@@ -1990,22 +1983,32 @@ def get_channel_config(profile_override=None):
         char_dna = "RECURRING MAIN CHARACTER: The exact same recurring 2D stickman mascot: a cute minimalist 2D stick figure with a solid smooth tan-brown round head (#C89B78), thick black marker outline, simple expressive black dot eyes, small neat black mustache and tiny chin goatee, wearing dynamic era-appropriate clothing matching the exact historical era of the story (e.g. prehistoric animal fur wrap for Stone Age, linen kilt for Ancient Egypt, classical tunic for Antiquity, medieval tunic for Middle Ages), black stick arms and legs."
 
     widescreen_suffix = (
-        f". Full-bleed 16:9 widescreen 2D cartoon doodle illustration in the distinct hand-drawn webcomic animation style of Mack and Zenn. "
+        f". Full-bleed 16:9 widescreen 2D cartoon doodle illustration in the distinct hand-drawn webcomic animation style of Ink Explainer. "
         f"{char_dna} "
-        f"STYLE: 2D minimalist webcomic doodle art, bold clean thick black ink marker outlines, solid flat cel-shaded colors, playful cartoon energy. "
-        f"AUTHENTIC OBJECT COLORS: Light blue sky with white clouds, vibrant GREEN tree leaves on brown trunks, fresh green grass, natural earth ground. Strictly NO monochrome yellow wash over trees or background. "
-        f"COMPOSITION: Full landscape scene filling the entire 16:9 canvas corner-to-corner with zero borders and zero white margins. "
+        f"ANATOMICAL INTEGRITY: Exactly two arms, exactly two hands, exactly two legs, and exactly two feet. Strictly NEVER generate three arms, three legs, extra hands, mutated limbs, floating hands, or duplicate appendages. "
+        f"STYLE: Authentic 2D minimalist webcomic doodle art, bold clean thick black ink marker outlines, solid flat cel-shaded vibrant colors, playful cartoon energy. All characters, props, and background objects must be 100% solid filled opaque cartoon doodle vectors (strictly NO transparent outlines, NO wireframes, NO unfinished sketch lines). "
+        f"HIGH-CONTRAST COLOR SEPARATION (STRICT ZERO COLOR MIXING): Foreground subjects and props MUST strongly contrast against background walls, floors, and scenery. Strictly NEVER use the same color family for foreground and background (e.g. NEVER place a blue bed/blanket against a blue wall, and NEVER place a grey bed against a grey wall). Every foreground furniture piece, bedding, and prop must use rich, contrasting solid cel-shaded colors (e.g. warm polished wood headboard, mustard-yellow or forest-green or coral-red blanket, crisp white sheets, warm glowing lamps) that cleanly pop out with distinct visual depth from the room background. "
+        f"DYNAMIC DOODLE BACKGROUND: Fully illustrated 2D cartoon doodle environment tailored specifically to the scene setting (e.g. cozy bedroom with nightstand and wallpaper, modern laboratory, kitchen, study, hospital room, outdoor porch, or macro cutaway) with thematic doodle furniture and solid flat-colored surfaces. Strictly DO NOT default to generic blue sky and trees when the scene is indoors or in other environments. "
+        f"FULLSCREEN FULL-BLEED MANDATE (ZERO BORDERS, ZERO HALF-SPLITS): "
+        f"The illustration MUST bleed seamlessly all the way to the extreme outer edges of the 16:9 screen corner-to-corner. "
+        f"Strictly NEVER draw borders, white borders, black borders, outer frames, white margins, comic panel boxes, picture frames, or padding. "
+        f"Strictly NO half-screen splits, NO split frames, NO inset panels, NO horizontal dividing lines cutting the screen in half. "
+        f"The scene must be a unified 100% full-screen immersive background. "
         f"NO realistic humans. NO photorealism. NO 3D rendering. NO borders. NO white margins. "
-        f"TEXT RULE: Strictly NEVER add white floating text. Strictly NEVER add text in image corners. Any required text must be authentic hand-drawn bold black marker doodle lettering cleanly integrated into the scene (e.g. on wooden signs, hanging plaques, banners, pie charts, or labels)."
+        f"TEXT RULE: Only include deliberate in-scene environmental text explicitly specified in the prompt (e.g. computer monitor readouts, lab signs, framed posters, chalkboard formulas). Strictly NEVER add unwanted text, channel names, artist logos, watermarks, text in corners (strictly NO 'Mack and Zenn' or artist signatures), or random floating title banners across the image."
     )
     vertical_suffix = (
-        f". Full-bleed 9:16 vertical 2D cartoon doodle illustration in the distinct hand-drawn webcomic animation style of Mack and Zenn. "
+        f". Full-bleed 9:16 vertical 2D cartoon doodle illustration in the distinct hand-drawn webcomic animation style of Ink Explainer. "
         f"{char_dna} "
-        f"STYLE: 2D minimalist webcomic doodle art, bold clean thick black ink marker outlines, solid flat cel-shaded colors. "
-        f"AUTHENTIC OBJECT COLORS: Light blue sky with white clouds, vibrant GREEN tree leaves on brown trunks, fresh green grass, natural earth ground. Strictly NO monochrome yellow wash over trees or background. "
-        f"COMPOSITION: Full vertical portrait scene filling the entire 9:16 canvas top-to-bottom with zero borders. "
+        f"ANATOMICAL INTEGRITY: Exactly two arms, exactly two hands, exactly two legs, and exactly two feet. Strictly NEVER generate three arms, three legs, extra hands, mutated limbs, floating hands, or duplicate appendages. "
+        f"STYLE: Authentic 2D minimalist webcomic doodle art, bold clean thick black ink marker outlines, solid flat cel-shaded colors. All characters, props, and background objects must be 100% solid filled opaque cartoon doodle vectors. "
+        f"HIGH-CONTRAST COLOR SEPARATION (STRICT ZERO COLOR MIXING): Foreground subjects and props MUST strongly contrast against background walls and floors. Strictly NEVER use the same color family for foreground and background. Foreground objects must use rich, contrasting solid colors that pop out with clear depth. "
+        f"DYNAMIC DOODLE BACKGROUND: Fully illustrated 2D cartoon doodle environment tailored specifically to the scene setting with thematic doodle props and solid flat-colored surfaces. "
+        f"FULLSCREEN FULL-BLEED MANDATE (ZERO BORDERS, ZERO HALF-SPLITS): "
+        f"The illustration MUST bleed seamlessly top-to-bottom filling 100% of the canvas. "
+        f"Strictly NEVER draw borders, frames, margins, comic panel boxes, or split frames. "
         f"NO realistic humans. NO photorealism. NO 3D rendering. NO borders. NO white margins. "
-        f"TEXT RULE: Strictly NEVER add white floating text. Strictly NEVER add text in image corners. Any required text must be authentic hand-drawn bold black marker doodle lettering cleanly integrated into the scene (e.g. on wooden signs, hanging plaques, banners, pie charts, or labels)."
+        f"TEXT RULE: Strictly NEVER add white floating text. Strictly NEVER add text in image corners. Any required text must be authentic hand-drawn bold black marker doodle lettering cleanly integrated into the scene."
     )
 
     return {
@@ -2406,7 +2409,11 @@ def run_workflow():
         
         breakdown_approved = False
         while not breakdown_approved:
-            choice = get_user_interaction(select_msg, timeout=60, default_choice="approve_breakdown")
+            if state.get("auto_mode") or state.get("auto_approve_breakdown"):
+                print("[Auto-Approval] Scene Breakdown auto-approved. Advancing to Step 6...", flush=True)
+                choice = "approve_breakdown"
+            else:
+                choice = get_user_interaction(select_msg, timeout=60, default_choice="approve_breakdown")
             raw_lower = choice.lower().strip()
 
             if choice in ["approve", "approve_breakdown"] or "approve" in raw_lower or "/approve" in raw_lower:
@@ -2648,10 +2655,15 @@ def run_workflow():
                 f"Buttons are active if you wish to regenerate any scene:",
                 buttons=buttons
             )
-            # Wait up to 30s for any user tap (e.g. Re-gen button) or auto-approve and proceed
-            choice = get_user_interaction(select_msg, timeout=30, default_choice="approve_all_batch")
-            while choice and choice == "__regen_handled__":
-                choice = get_user_interaction(select_msg, timeout=30, default_choice="approve_all_batch")
+            # Auto-approval mode for hands-free pipeline execution
+            if state.get("auto_mode") or state.get("auto_approve_images"):
+                print(f"[Auto-Approval] Batch {batch_num}/{total_batches} auto-approved. Advancing immediately...", flush=True)
+                choice = "approve_all_batch"
+            else:
+                # Wait for user tap (e.g. Re-gen button or Approve All)
+                choice = get_user_interaction(select_msg, timeout=None, default_choice=None)
+                while choice and choice == "__regen_handled__":
+                    choice = get_user_interaction(select_msg, timeout=None, default_choice=None)
             for item in batch:
                 batch_approved_set.add(item["num"])
                 checkpoints[item["num"]] = checkpoints.get(item["num"], {})
@@ -2659,14 +2671,15 @@ def run_workflow():
             with open(chk_path, "w", encoding="utf-8") as f:
                 json.dump(checkpoints, f, indent=4)
 
-            # Once all 10 in batch are approved: copy to Approved & Final, save checkpoint
+            # Once all items in batch are approved: clean watermark, copy to Approved & Final, save checkpoint
+            from watermark_remover import remove_gemini_watermark
             for item in batch:
                 num = item["num"]
                 approved_path = os.path.join(img_dir, "Approved", f"Scene_{num}.png")
                 final_path = os.path.join(img_dir, "Final", f"Scene_{num}.png")
                 if os.path.exists(item["output_path"]):
-                    shutil.copy2(item["output_path"], approved_path)
-                    shutil.copy2(item["output_path"], final_path)
+                    remove_gemini_watermark(item["output_path"], approved_path)
+                    remove_gemini_watermark(item["output_path"], final_path)
                 state["approved_scenes"][num] = item["padded_filename"]
                 checkpoints[num] = {
                     "worker_api": "cloudflare_workers",

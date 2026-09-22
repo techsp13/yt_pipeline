@@ -45,13 +45,17 @@ Why: Any pauses, breaths, or explanation emphasis between sentences are automati
 
 ---
 
-## RULE 6: High-CTR Split-Screen Thumbnail Standards
-- Composition: Split-Screen Layout (Left Side = Text, Right Side = Large Central Object).
-- Font: STRICTLY Patrick Hand handmade doodle font (PatrickHand-Regular.ttf).
-- Text Color: Vibrant Doodle Yellow (#FFE100) with thick 10px black marker outline and drop shadow.
-- Spacing: Exact ~30px clean margin between text block and object.
-- Object Size: Maximized (680x676px zone) for prominent, eye-catching visual punch.
-- No Stickman: 100% stickman-free on thumbnails for clean, high-impact focus.
+## RULE 6: Mandatory 5-Thumbnail A/B Testing Standards
+- **Always Generate 5 Distinct Thumbnails:** Every project MUST automatically generate 5 complete, distinct thumbnail options (`Thumbnail_1.png` to `Thumbnail_5.png`) saved into `12_Thumbnail/`.
+- **Diversity Across All 5:**
+  * **Option 1 (Hero Hook):** Primary curiosity gap / SEO hook + main dramatic focal scene + `mind_blown` mascot pose.
+  * **Option 2 (Sensory / Process):** Sensory / mechanism angle (e.g. smell, thermal scan, heat vision) + `pointing_right` mascot pose.
+  * **Option 3 (Science / Evidence):** Deep lab investigation, DNA / blueprints, evidence proof + `explaining` mascot pose.
+  * **Option 4 (Hidden Mystery):** Invisible beacon, gas plumes, unseen forces + `shocked` mascot pose.
+  * **Option 5 (The Contrast):** Stark split-screen contrast (victim vs unaffected, untouched vs devoured) + `curious` mascot pose.
+- **Typography & Font:** Big bold hand-drawn 2D cartoon doodle bubble lettering in vibrant Doodle Yellow (`#FFCC00` / `#FFE100`) with thick black marker outlines around every letter.
+- **Format:** 16:9 widescreen YouTube thumbnail format, high-contrast composition, 100% borderless.
+- **Telegram Interactive Suite:** All 5 thumbnails are sent to Telegram as an album with interactive buttons (`Pick #1` to `Pick #5` or `Regen 5`) allowing one-click selection of the active master thumbnail while retaining all 5 for YouTube Studio A/B testing.
 
 ---
 
@@ -85,3 +89,18 @@ Why: Any pauses, breaths, or explanation emphasis between sentences are automati
   * **Characters & Props:** Tan skin (`#C89B78`), era-appropriate clothing (brown fur wrap, blue tunic, khaki safari shirt), steel grey weapons with brown wooden handles.
 - **Strictly Banned Monochromatic Washes:** Absolutely NO monochrome color drenching where the entire background, trees, and sky are bathed in a single uniform yellow, beige, or olive-green tint. Each object must stand out with its own proper natural color.
 - **High Contrast & Negative Space:** Sharp visual clarity and cel-shaded definition with bold black marker outlines.
+
+---
+
+## RULE 10: Minimal Text & Hand-Drawn Marker Typography Standard (Reference Match)
+- **Ultra-Minimal Text (1–3 Words Max, Zero Clutter):**
+  * NEVER put long phrases, full sentences, or multiple floating text labels in scene images.
+  * Maximum 1 to 3 punchy words per visual (e.g., `"NOT FROM HERE?"`, `"DECOMPOSE"`, `"BACTERIA"`).
+  * If the illustration already communicates the story visually, use **ZERO text**. The visual action and mascot must carry the explanation.
+- **Hand-Drawn Marker Font & Styling (Matching Reference):**
+  * **Font Aesthetic:** Casual, organic hand-lettered marker / comic comic-book typography (`PatrickHand-Regular.ttf` style). Must look like an artist drew it on paper with a felt-tip pen.
+  * **Color Code:**
+    - **Bold Red (`#E11D48` / `#D32F2F`):** For high-curiosity questions, hooks, anomalies, or alerts (e.g., `"NOT FROM HERE?"`).
+    - **Solid Black (`#0F172A` / `#000000`):** For physical/biological processes, scientific terms, or core nouns (e.g., `"DECOMPOSE"`).
+  * **Hand-Drawn Visual Accents:** Complement text with simple hand-drawn directional arrows (red dashed curve or solid black arrows) guiding the eye to the focal subject.
+  * **Banned Text Styles:** Strictly NO artificial digital UI boxes, typewriter badges, neon gradients, heavy dropshadows, or blocky sterile system fonts. Pure hand-drawn marker lettering only.
