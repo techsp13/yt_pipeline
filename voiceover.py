@@ -123,6 +123,8 @@ def clean_tts_transcript(text):
     text = re.sub(r"[\(\[\{](?:Visual|Narrator|Scene|Note|Camera|Animation)[^\)\]\}]*[\)\]\}]", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\([^\)]*\)", "", text)
     text = re.sub(r"\[[^\]]*\]", "", text)
+    # Strip any remaining lone unclosed brackets
+    text = re.sub(r"[\(\[\{\)\]\}]", "", text)
     meta_pattern = r"\b(stick\s*figures?|stickfigures?|doodles?|illustrations?|on-screen|on screen|narrators?|animations?|drawings?|act\s*\d+|scene\s*\d+)\b"
     text = re.sub(meta_pattern, "", text, flags=re.IGNORECASE)
     text = text.replace('"', '').replace('*', '').strip()
@@ -134,16 +136,66 @@ def clean_tts_transcript(text):
     return text
 
 
+def build_continuous_tts_transcript(valid_scenes):
+    """
+    Reconstructs fluid, unbroken grammatical sentences for Cartesia TTS.
+    Eliminates artificial mid-sentence pauses and intonation resets caused by ' ... ' delimiters.
+    """
+    chunks = []
+    for item in valid_scenes:
+        if isinstance(item, (list, tuple)):
+            n = item[1]
+        elif isinstance(item, dict):
+            n = item.get("narration")
+        else:
+            n = str(item)
+        n_clean = str(n or "").strip()
+        if n_clean:
+            chunks.append(n_clean)
+
+    # Join with clean single space (sentences flow continuously with natural punctuation)
+    full_text = " ".join(chunks)
+    full_text = re.sub(r"\s+", " ", full_text)
+    full_text = re.sub(r"\s+([,.:;!?])", r"\1", full_text)
+    return full_text.strip()
+
+
+def split_into_tts_chunks(text, max_words=300):
+    """Splits a long narration into natural spoken chunks at sentence boundaries."""
+    if len(text.split()) <= max_words:
+        return [text]
+    
+    parts = re.split(r"(?<=[.!?])\s+", text)
+    delim = " "
+
+    chunks = []
+    cur_chunk = []
+    cur_words = 0
+    for p in parts:
+        p_clean = p.strip()
+        if not p_clean:
+            continue
+        p_w = len(p_clean.split())
+        if cur_words + p_w > max_words and cur_chunk:
+            chunks.append(delim.join(cur_chunk))
+            cur_chunk = [p_clean]
+            cur_words = p_w
+        else:
+            cur_chunk.append(p_clean)
+            cur_words += p_w
+    if cur_chunk:
+        chunks.append(delim.join(cur_chunk))
+    return chunks
+
 
 _EXHAUSTED_KEYS = set()
 
-def generate_speech_cartesia(text, output_path, voice_id=DEFAULT_VOICE_ID, api_key=None, retry_clone_on_missing=True):
+def _generate_single_chunk_cartesia(text, output_path, voice_id=DEFAULT_VOICE_ID, api_key=None, retry_clone_on_missing=True):
     """
-    Generates high-speed, high-quality audio using Cartesia AI API with automatic key rotation.
+    Generates audio for a single chunk (<350 words) using Cartesia AI API with automatic key rotation.
     """
-    text = clean_tts_transcript(text)
     if not text or len(text) < 2:
-        return False  # Empty narration → no audio; do not speak placeholder text
+        return False
 
     all_keys = [api_key] if api_key else get_all_cartesia_keys()
     keys_to_try = [k for k in all_keys if k not in _EXHAUSTED_KEYS]
@@ -175,12 +227,12 @@ def generate_speech_cartesia(text, output_path, voice_id=DEFAULT_VOICE_ID, api_k
             },
             "output_format": {
                 "container": container_format,
-                "sample_rate": 44100
+                "sample_rate": 24000 if container_format == "wav" else 44100
             },
             "generation_config": {
                 "speed": 1.0,
                 "volume": 1.0,
-                "emotion": "curious"   # consistent narrator tone across all scenes
+                "emotion": "curious"
             }
         }
         
@@ -204,9 +256,9 @@ def generate_speech_cartesia(text, output_path, voice_id=DEFAULT_VOICE_ID, api_k
                 print(f"[Cartesia TTS] Voice ID '{target_vid}' not found in Key #{idx}. Auto-cloning voice...")
                 new_vid = clone_voice_cartesia(api_key=key)
                 if new_vid:
-                    return generate_speech_cartesia(text, output_path, voice_id=new_vid, api_key=key, retry_clone_on_missing=False)
+                    return _generate_single_chunk_cartesia(text, output_path, voice_id=new_vid, api_key=key, retry_clone_on_missing=False)
 
-            # Handle temporary concurrency rate limit (429) -> Backoff & retry, do NOT exhaust key!
+            # Handle temporary concurrency rate limit (429) -> Backoff & retry
             if res.status_code == 429:
                 import time
                 time.sleep(1.5)
@@ -221,7 +273,7 @@ def generate_speech_cartesia(text, output_path, voice_id=DEFAULT_VOICE_ID, api_k
                     print(f"[Cartesia] Rotating to next key ({idx+1}/{len(keys_to_try)})...")
                 continue
 
-            # Fallback to sonic-2 model if sonic-3.5 returned temporary error
+            # Fallback to sonic-2 model if temporary error
             print(f"[Cartesia TTS] Warning: Key #{idx} returned {res.status_code}. Retrying...")
             headers["Cartesia-Version"] = "2024-06-10"
             payload["model_id"] = "sonic-2"
@@ -250,10 +302,74 @@ def generate_speech_cartesia(text, output_path, voice_id=DEFAULT_VOICE_ID, api_k
             last_error = str(e)
             continue
 
-    # If all keys failed, notify Telegram
     print("[Cartesia TTS] ALL keys in rotation pool expired or failed!")
     notify_key_expired(last_error or "All Cartesia keys in rotation pool exhausted")
     return False
+
+
+def generate_speech_cartesia(text, output_path, voice_id=DEFAULT_VOICE_ID, api_key=None, retry_clone_on_missing=True):
+    """
+    Main Cartesia voice generator with automatic chunking for long narrations.
+    Guarantees 100% voiceover coverage with zero truncation regardless of script length.
+    """
+    text = clean_tts_transcript(text)
+    if not text or len(text) < 2:
+        return False
+
+    words = text.split()
+    # If text is within Cartesia's safe single-call buffer (<= 350 words), generate directly
+    if len(words) <= 350:
+        return _generate_single_chunk_cartesia(text, output_path, voice_id=voice_id, api_key=api_key, retry_clone_on_missing=retry_clone_on_missing)
+
+    # For long scripts, split into safe chunks of ~300 words and stitch seamlessly with FFmpeg
+    chunks = split_into_tts_chunks(text, max_words=300)
+    print(f"[Cartesia TTS] Long script ({len(words)} words) -> Split into {len(chunks)} chunks for 100% complete voiceover.")
+
+    import tempfile, subprocess
+    temp_dir = os.path.join(os.path.dirname(os.path.abspath(output_path)), "temp_tts_chunks")
+    os.makedirs(temp_dir, exist_ok=True)
+
+    chunk_files = []
+    success_all = True
+    for c_idx, chunk_text in enumerate(chunks):
+        c_path = os.path.join(temp_dir, f"chunk_{c_idx:03d}.wav")
+        print(f"  [Chunk {c_idx+1}/{len(chunks)}] Synthesizing {len(chunk_text.split())} words...")
+        ok = _generate_single_chunk_cartesia(chunk_text, c_path, voice_id=voice_id, api_key=api_key, retry_clone_on_missing=retry_clone_on_missing)
+        if not ok or not os.path.exists(c_path) or os.path.getsize(c_path) < 1000:
+            print(f"  [Chunk {c_idx+1}] FAILED!")
+            success_all = False
+            break
+        chunk_files.append(c_path)
+
+    if not success_all or len(chunk_files) != len(chunks):
+        print("[Cartesia TTS] Chunked generation failed for one or more chunks.")
+        return False
+
+    # Seamless concatenation using FFmpeg concat demuxer
+    concat_list_p = os.path.join(temp_dir, "concat_list.txt")
+    with open(concat_list_p, "w", encoding="utf-8") as f:
+        for cf in chunk_files:
+            cf_clean = cf.replace("\\", "/")
+            f.write(f"file '{cf_clean}'\n")
+
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+    if output_path.endswith(".mp3"):
+        cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_list_p, "-c:a", "libmp3lame", "-b:a", "192k", output_path]
+    else:
+        cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_list_p, "-c:a", "pcm_s16le", "-ar", "24000", output_path]
+
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+    # Clean up temp chunk files
+    import shutil
+    try:
+        shutil.rmtree(temp_dir)
+    except Exception:
+        pass
+
+    final_size_kb = os.path.getsize(output_path) / 1024
+    print(f"[Cartesia TTS] Concatenated {len(chunks)} chunks -> {output_path} ({final_size_kb:.1f} KB)")
+    return True
 
 
 
