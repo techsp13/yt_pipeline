@@ -8,6 +8,22 @@
                 "views": 8065947,
                 "rhythm_score": 100,
                 "sentence_avg": 18.0
+            },
+            {
+                "id": "T7pQEDg9WRY",
+                "title": "The Origins of the Neanderthals",
+                "channel": "Stefan Milo",
+                "views": 311685,
+                "rhythm_score": 100,
+                "sentence_avg": 291.8
+            },
+            {
+                "id": "NpoxYebcQfg",
+                "title": "Eyewitness Describes The 1762 Native American Embassy to England (Diary of Henry Timberlake)",
+                "channel": "Voices of the Past",
+                "views": 156845,
+                "rhythm_score": 0,
+                "sentence_avg": 2156
             }
         ],
         "hook_bank": [
@@ -16,9 +32,21 @@
                 "channel": "Fall of Civilizations",
                 "hook_excerpt": "The ruins of the great city of Hattusa are an awe-inspiring site. They sit right in the center of modern Turkey on a rocky outcrop overlooking a bend in the Kızılırmak River. Hattusa's crumbling walls of gray limestone stand out against the tawny yellow grassland of the hills, lying where they fell ",
                 "views": 8065947
+            },
+            {
+                "title": "The Origins of the Neanderthals",
+                "channel": "Stefan Milo",
+                "hook_excerpt": "[Music] yeah again in the end atolls are the only hominin to have probably evolved in Europe so I thought it was only right to kick off this video with a slice of pizza which in my humble moustached opinion is Europe's greatest invention now before I start talking about the Neanderthals who they wer",
+                "views": 311685
+            },
+            {
+                "title": "Eyewitness Describes The 1762 Native American Embassy to England (Diary of Henry Timberlake)",
+                "channel": "Voices of the Past",
+                "hook_excerpt": "i knew much of the great ostanako the warrior and orator of the cherokee he was always the guest of my father on his journeys to and from williamsburg i was in his camp when he made his great farewell oration to his people the evening before he departed for england the moon was in full splendor and ",
+                "views": 156845
             }
         ],
-        "avg_wpm": 150.5,
+        "avg_wpm": 150.0,
         "sensory_bank": [
             "iron",
             "copper",
@@ -27,7 +55,13 @@
             "fire",
             "blood",
             "stone",
-            "hand"
+            "hand",
+            "cold",
+            "ice",
+            "bone",
+            "smoke",
+            "skin",
+            "hunger"
         ]
     },
     "money": {
@@ -39,6 +73,22 @@
                 "views": 1512447,
                 "rhythm_score": 100,
                 "sentence_avg": 861.3
+            },
+            {
+                "id": "iRgp8oBiAmw",
+                "title": "South Korea Is a Dystopia",
+                "channel": "fern",
+                "views": 6695178,
+                "rhythm_score": 100,
+                "sentence_avg": 921.3
+            },
+            {
+                "id": "9RJpIqD8MGg",
+                "title": "Escaping the Rat Race: What School Failed to Teach You About Money.",
+                "channel": "James Jani",
+                "views": 9102618,
+                "rhythm_score": 0,
+                "sentence_avg": 3169
             }
         ],
         "hook_bank": [
@@ -47,13 +97,30 @@
                 "channel": "MagnatesMedia",
                 "hook_excerpt": "[Music] cornelius vanderbilt has been described as an illiterate brute with a short temper who was hated or feared by most people he met and yet he's also one of the wealthiest men in history an incredibly shrewd and cunning business magnate who was once the richest man in the world in fact when he ",
                 "views": 1512447
+            },
+            {
+                "title": "South Korea Is a Dystopia",
+                "channel": "fern",
+                "hook_excerpt": "chel is the Korean word for the powerful family own conglomerate from anguish to frustration the arrogance of the Rich and Powerful an emergency dispatcher in South Korea receives a distress call from a child aboard a fairy the sea fair is making a ro routin Journey to the vacation hotspot juu Islan",
+                "views": 6695178
+            },
+            {
+                "title": "Escaping the Rat Race: What School Failed to Teach You About Money.",
+                "channel": "James Jani",
+                "hook_excerpt": "in 2003 professional boxer and heavyweight champion mike tyson vowed for bankruptcy with 30 million dollars in debt despite accumulating over 300 million dollars during the course of his career which poses a great question about money itself because a great deal of our actions or our motivations in ",
+                "views": 9102618
             }
         ],
-        "avg_wpm": 193.7,
+        "avg_wpm": 172.2,
         "sensory_bank": [
             "dollar",
             "cash",
-            "contract"
+            "contract",
+            "iron",
+            "fire",
+            "stone",
+            "door",
+            "hand"
         ]
     },
     "science": {
@@ -65,6 +132,22 @@
                 "views": 3922618,
                 "rhythm_score": 100,
                 "sentence_avg": 16.3
+            },
+            {
+                "id": "Ol18JoeXlVI",
+                "title": "This Paradox Splits Smart People 50/50",
+                "channel": "Veritasium",
+                "views": 9269990,
+                "rhythm_score": 100,
+                "sentence_avg": 14.3
+            },
+            {
+                "id": "wEhOZJ55Ve8",
+                "title": "Are Humans Still Evolving?",
+                "channel": "Be Smart",
+                "views": 2256162,
+                "rhythm_score": 100,
+                "sentence_avg": 14.8
             }
         ],
         "hook_bank": [
@@ -73,12 +156,26 @@
                 "channel": "Kurzgesagt – In a Nutshell",
                 "hook_excerpt": "Everything we think about aliens \nmight be completely wrong, an expression of how primitive humanity actually is. We imagine progress as Dyson spheres, \ninterstellar travel and galactic empires. But what if this is just how cavemen \nimagine things? Bigger is better! We need more energy, more space, ",
                 "views": 3922618
+            },
+            {
+                "title": "This Paradox Splits Smart People 50/50",
+                "channel": "Veritasium",
+                "hook_excerpt": "- There is a problem that I can't bring up without starting a fight. - No, what? - It just seems so obvious to me. - Now I'm all screwed up, man. (Casper laughs) - It has infiltrated every\nsingle Veritasium meeting in the last two months. - It's trivial. (laughs) - I didn't think\nyou would fall for ",
+                "views": 9269990
+            },
+            {
+                "title": "Are Humans Still Evolving?",
+                "channel": "Be Smart",
+                "hook_excerpt": "The average person can\nhold their breath underwater for, like, one to two minutes. But every day on an\narchipelago in Southeast Asia, the Bajau people dive down\nmore than 60 meters deep to catch fish, and they\ncan hold their breath for more than 10 minutes. How? That's better. This ability, it doesn",
+                "views": 2256162
             }
         ],
-        "avg_wpm": 156.5,
+        "avg_wpm": 168.2,
         "sensory_bank": [
             "blood",
-            "skin"
+            "skin",
+            "cash",
+            "cold"
         ]
     }
 }
