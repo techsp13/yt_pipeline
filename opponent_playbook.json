@@ -1,0 +1,84 @@
+{
+    "history": {
+        "analyzed_videos": [
+            {
+                "id": "B965f8AcNbw",
+                "title": "2. The Bronze Age Collapse - Mediterranean Apocalypse",
+                "channel": "Fall of Civilizations",
+                "views": 8065947,
+                "rhythm_score": 100,
+                "sentence_avg": 18.0
+            }
+        ],
+        "hook_bank": [
+            {
+                "title": "2. The Bronze Age Collapse - Mediterranean Apocalypse",
+                "channel": "Fall of Civilizations",
+                "hook_excerpt": "The ruins of the great city of Hattusa are an awe-inspiring site. They sit right in the center of modern Turkey on a rocky outcrop overlooking a bend in the Kızılırmak River. Hattusa's crumbling walls of gray limestone stand out against the tawny yellow grassland of the hills, lying where they fell ",
+                "views": 8065947
+            }
+        ],
+        "avg_wpm": 150.5,
+        "sensory_bank": [
+            "iron",
+            "copper",
+            "ash",
+            "dark",
+            "fire",
+            "blood",
+            "stone",
+            "hand"
+        ]
+    },
+    "money": {
+        "analyzed_videos": [
+            {
+                "id": "KXFwnXEk6N4",
+                "title": "The Most BRUTAL Businessman In History",
+                "channel": "MagnatesMedia",
+                "views": 1512447,
+                "rhythm_score": 100,
+                "sentence_avg": 861.3
+            }
+        ],
+        "hook_bank": [
+            {
+                "title": "The Most BRUTAL Businessman In History",
+                "channel": "MagnatesMedia",
+                "hook_excerpt": "[Music] cornelius vanderbilt has been described as an illiterate brute with a short temper who was hated or feared by most people he met and yet he's also one of the wealthiest men in history an incredibly shrewd and cunning business magnate who was once the richest man in the world in fact when he ",
+                "views": 1512447
+            }
+        ],
+        "avg_wpm": 193.7,
+        "sensory_bank": [
+            "dollar",
+            "cash",
+            "contract"
+        ]
+    },
+    "science": {
+        "analyzed_videos": [
+            {
+                "id": "QW_jlUn4gA8",
+                "title": "This Is What a Godlike Civilization Would Look Like",
+                "channel": "Kurzgesagt – In a Nutshell",
+                "views": 3922618,
+                "rhythm_score": 100,
+                "sentence_avg": 16.3
+            }
+        ],
+        "hook_bank": [
+            {
+                "title": "This Is What a Godlike Civilization Would Look Like",
+                "channel": "Kurzgesagt – In a Nutshell",
+                "hook_excerpt": "Everything we think about aliens \nmight be completely wrong, an expression of how primitive humanity actually is. We imagine progress as Dyson spheres, \ninterstellar travel and galactic empires. But what if this is just how cavemen \nimagine things? Bigger is better! We need more energy, more space, ",
+                "views": 3922618
+            }
+        ],
+        "avg_wpm": 156.5,
+        "sensory_bank": [
+            "blood",
+            "skin"
+        ]
+    }
+}
